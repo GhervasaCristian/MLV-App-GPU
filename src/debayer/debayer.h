@@ -45,4 +45,10 @@ __attribute__ ((force_align_arg_pointer))
 /*AMaZE algo*/
 demosaic(amazeinfo_t * inputdata);
 
+/* GPU Spatio-Temporal LMMSE */
+#define DEBAYER_GPU_LMMSE 10
+void debayerStLmmseGpu(uint16_t * __restrict debayerto, int width, int height, void* gpu_context, uint64_t frame_index, int algo_mode, int black, int white, int cfa_pattern);
+int debayerStLmmseHasFrame(void* gpu_context, uint64_t frame_index);
+void debayerStLmmseUpload(void* gpu_context, uint64_t frame_index, uint16_t* raw_data);
+
 #endif

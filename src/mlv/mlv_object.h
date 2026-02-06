@@ -163,6 +163,8 @@ typedef struct {
     /* How many cores, will not neccesarily determine number of threads made in any case, but helps */
     int cpu_cores; /* Default 4 */
 
+    /* GPU Context for ST-LMMSE Demosaic */
+    void * st_lmmse_ctx;
 
 } mlvObject_t;
 

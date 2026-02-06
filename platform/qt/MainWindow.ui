@@ -199,6 +199,7 @@
      <addaction name="actionUseSimpleDebayer"/>
      <addaction name="actionUseBilinear"/>
      <addaction name="actionUseLmmseDebayer"/>
+     <addaction name="actionUseGpuLmmseDebayer"/>
      <addaction name="actionUseIgvDebayer"/>
      <addaction name="actionAlwaysUseAMaZE"/>
      <addaction name="actionUseAhdDebayer"/>

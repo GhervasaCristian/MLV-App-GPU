@@ -26,6 +26,7 @@
 #include "../debayer/debayer.h"
 /* Processing module */
 #include "../processing/raw_processing.h"
+#include "../debayer/st_lmmse.h"
 
 /* Lossless decompression */
 #include "liblj92/lj92.h"
@@ -655,6 +656,8 @@ mlvObject_t * initMlvObject()
     camera_id_t *camid = camidGet(0);
     memcpy(&video->camid, camid, sizeof(camera_id_t));
 
+    video->st_lmmse_ctx = NULL;
+
     /* Retun pointer */
     return video;
 }
@@ -701,6 +704,12 @@ void freeMlvObject(mlvObject_t * video)
     pthread_mutex_destroy(&video->g_mutexFind);
     pthread_mutex_destroy(&video->g_mutexCount);
     pthread_mutex_destroy(&video->cache_mutex);
+
+    if(video->st_lmmse_ctx) 
+    {
+        st_lmmse_free_context(video->st_lmmse_ctx);
+        video->st_lmmse_ctx = NULL;
+    }
 
     /* Main 1 */
     free(video);

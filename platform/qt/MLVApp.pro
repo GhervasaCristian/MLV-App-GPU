@@ -97,6 +97,26 @@ win32{
     {
         QMAKE_CXXFLAGS += -fopenmp -std=c++14 -ftree-vectorize
     }
+    
+    # --- CUDA Configuration ---
+    # Detect if CUDA_PATH is set, otherwise default to a common path or assume nvcc is in PATH
+    CUDA_DIR = $$(CUDA_PATH)
+    isEmpty(CUDA_DIR) {
+        # Try to find nvcc
+        CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" 
+    }
+
+    # Add libraries
+    LIBS += -L"$$CUDA_DIR/lib/x64" -lcudart
+
+    # Define CUDA Compiler for QMake
+    cuda.input = CUDA_SOURCES
+    cuda.output = ${QMAKE_FILE_BASE}.obj
+    cuda.commands = $$CUDA_DIR/bin/nvcc.exe -c -O3 -arch=sm_50 --use_fast_math -Xcompiler $$join(QMAKE_CXXFLAGS,",") $$join(DEFINES, " -D", "-D") -I. $$join(INCLUDEPATH, '" -I"', '-I"') ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
+    cuda.dependency_type = TYPE_C
+    
+    # Add to QMake compilers
+    QMAKE_EXTRA_COMPILERS += cuda
 }
 
 # Win64 static: install msys2 to the default location C:\msys64, install qt $ pacman -S mingw-w64-x86_64-qt5-static, then set up qt-creator accordingly.
@@ -143,6 +163,7 @@ SOURCES += \
         main.cpp \
         MainWindow.cpp \
     ../../src/debayer/amaze_demosaic.c \
+    ../../src/debayer/debayer_gpu.c \
     ../../src/debayer/debayer.c \
     ../../src/debayer/conv.c \
     ../../src/debayer/basic.c \
@@ -242,12 +263,15 @@ SOURCES += \
     ../../src/librtprocess/src/include/librtprocesswrapper.cpp \
     ../../src/debayer/ahdOld.c
 
+CUDA_SOURCES += ../../src/debayer/st_lmmse.cu
+
 INCLUDEPATH += ../../src/librtprocess/src/include/
 
 macx: SOURCES += ../cocoa/avf_lib/avf_lib.m
 
 HEADERS += MainWindow.h \
     ../../src/debayer/debayer.h \
+    ../../src/debayer/st_lmmse.h \
     ../../src/debayer/helpersse2.h \
     ../../src/debayer/conv.h \
     ../../src/debayer/basic.h \

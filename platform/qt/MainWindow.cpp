@@ -10321,6 +10321,12 @@ void MainWindow::on_comboBoxDebayer_currentIndexChanged(int index)
     selectDebayerAlgorithm();
 }
 
+void MainWindow::on_actionUseGpuLmmseDebayer_triggered()
+{
+    selectDebayerAlgorithm();
+    return;
+}
+
 //Select the debayer algorithm in dependency to playback and chosen playback setting, or clip setting
 void MainWindow::selectDebayerAlgorithm()
 {
@@ -10359,6 +10365,9 @@ void MainWindow::selectDebayerAlgorithm()
         case ReceiptSettings::DCB:
             setMlvUseDcbDebayer( m_pMlvObject );
             break;
+        case ReceiptSettings::GPU_LMMSE:
+            setMlvUseGpuLmmseDebayer( m_pMlvObject );
+            break;
         default:
             break;
         }
@@ -10391,6 +10400,12 @@ void MainWindow::selectDebayerAlgorithm()
             setMlvUseLmmseDebayer( m_pMlvObject );
             disableMlvCaching( m_pMlvObject );
             m_pChosenDebayer->setText( tr( "LMMSE" ) );
+        }
+        else if( ui->actionUseGpuLmmseDebayer->isChecked() )
+        {
+            setMlvUseGpuLmmseDebayer( m_pMlvObject );
+            disableMlvCaching( m_pMlvObject );
+            m_pChosenDebayer->setText( tr( "GPU LMMSE" ) );
         }
         else if( ui->actionUseIgvDebayer->isChecked() )
         {

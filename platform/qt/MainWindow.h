@@ -191,6 +191,7 @@ private slots:
     void on_actionUseSimpleDebayer_triggered();
     void on_actionUseBilinear_triggered();
     void on_actionUseLmmseDebayer_triggered();
+    void on_actionUseGpuLmmseDebayer_triggered();
     void on_actionUseIgvDebayer_triggered();
     void on_actionUseAhdDebayer_triggered();
     void on_actionUseRcdDebayer_triggered();

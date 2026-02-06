@@ -156,9 +156,6 @@ win32{
     
     # Add to QMake compilers
     QMAKE_EXTRA_COMPILERS += cuda
-
-    # Some versions of MinGW need this to help with cross-compiler symbol resolution
-    QMAKE_LFLAGS += -flto
 }
 
 # Win64 static: install msys2 to the default location C:\msys64, install qt $ pacman -S mingw-w64-x86_64-qt5-static, then set up qt-creator accordingly.

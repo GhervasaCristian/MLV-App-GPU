@@ -18,7 +18,7 @@ CFLAGS        = -fno-keep-inline-dllexport -O2 -fopenmp -mssse3 -msse3 -msse2 -m
 CXXFLAGS      = -fno-keep-inline-dllexport -fopenmp -std=c++17 -ftree-vectorize -fopenmp -std=c++14 -ftree-vectorize -g -std=gnu++1z -Wall -Wextra -Wextra -fexceptions -mthreads $(DEFINES)
 INCPATH       = -I../../../qt -I. -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/include" -I../../../../src/librtprocess/src/include -IC:/Qt/6.10.1/mingw_64/include -IC:/Qt/6.10.1/mingw_64/include/QtMultimedia -IC:/Qt/6.10.1/mingw_64/include/QtWidgets -IC:/Qt/6.10.1/mingw_64/include/QtGui -IC:/Qt/6.10.1/mingw_64/include/QtNetwork -IC:/Qt/6.10.1/mingw_64/include/QtCore -Imoc -Iui -I/include -IC:/Qt/6.10.1/mingw_64/mkspecs/win32-g++ 
 LINKER      =        g++
-LFLAGS        =        -flto -Wl,-subsystem,windows -mthreads
+LFLAGS        =        -Wl,-subsystem,windows -mthreads
 LIBS        =        -llibgomp-1 -L"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\lib\x64" -lcudart C:\Qt\6.10.1\mingw_64\lib\libQt6Multimedia.a C:\Qt\6.10.1\mingw_64\lib\libQt6Widgets.a C:\Qt\6.10.1\mingw_64\lib\libQt6Gui.a C:\Qt\6.10.1\mingw_64\lib\libQt6Network.a C:\Qt\6.10.1\mingw_64\lib\libQt6Core.a obj\MLVApp_resource_res.o -lmingw32 C:\Qt\6.10.1\mingw_64\lib\libQt6EntryPoint.a -lshell32  
 QMAKE         = C:\Qt\6.10.1\mingw_64\bin\qmake.exe
 DEL_FILE      = del

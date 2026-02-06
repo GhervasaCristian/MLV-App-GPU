@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Easy debayer types */
 void debayerEasy(uint16_t * __restrict debayerto, float * __restrict bayerdata, int width, int height, int threads, int type);
 /* Quite quick bilinear debayer, floating point sadly; threads argument is unused */
@@ -46,9 +50,15 @@ __attribute__ ((force_align_arg_pointer))
 demosaic(amazeinfo_t * inputdata);
 
 /* GPU Spatio-Temporal LMMSE */
-#define DEBAYER_GPU_LMMSE 10
+#define DEBAYER_GPU_LMMSE 9
 void debayerStLmmseGpu(uint16_t * __restrict debayerto, int width, int height, void* gpu_context, uint64_t frame_index, int algo_mode, int black, int white, int cfa_pattern);
 int debayerStLmmseHasFrame(void* gpu_context, uint64_t frame_index);
 void debayerStLmmseUpload(void* gpu_context, uint64_t frame_index, uint16_t* raw_data);
+int st_lmmse_get_width(void* gpu_context);
+int st_lmmse_get_height(void* gpu_context);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

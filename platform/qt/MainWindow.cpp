@@ -3071,6 +3071,15 @@ void MainWindow::startExportAVFoundation(QString fileName)
         case ReceiptSettings::AHD:
             setMlvUseAhdDebayer( m_pMlvObject );
             break;
+        case ReceiptSettings::RCD:
+            setMlvUseRcdDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::DCB:
+            setMlvUseDcbDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_LMMSE:
+            setMlvUseGpuLmmseDebayer( m_pMlvObject );
+            break;
         default:
             break;
         }

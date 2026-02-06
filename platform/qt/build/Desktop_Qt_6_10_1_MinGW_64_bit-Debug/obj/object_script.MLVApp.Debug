@@ -1,4 +1,4 @@
-st_lmmse.obj
+st_lmmse.o
 obj/cuda_shim.o
 obj/ClipInformation.o
 obj/RenameDialog.o
@@ -7,7 +7,6 @@ obj/Updater.o
 obj/main.o
 obj/MainWindow.o
 obj/amaze_demosaic.o
-obj/debayer_gpu.o
 obj/debayer.o
 obj/conv.o
 obj/basic.o

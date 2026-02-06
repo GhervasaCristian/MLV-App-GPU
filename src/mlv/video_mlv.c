@@ -656,6 +656,7 @@ mlvObject_t * initMlvObject()
     camera_id_t *camid = camidGet(0);
     memcpy(&video->camid, camid, sizeof(camera_id_t));
 
+    pthread_mutex_init(&video->gpu_mutex, NULL);
     video->st_lmmse_ctx = NULL;
 
     /* Retun pointer */
@@ -705,6 +706,7 @@ void freeMlvObject(mlvObject_t * video)
     pthread_mutex_destroy(&video->g_mutexCount);
     pthread_mutex_destroy(&video->cache_mutex);
 
+    pthread_mutex_destroy(&video->gpu_mutex);
     if(video->st_lmmse_ctx) 
     {
         st_lmmse_free_context(video->st_lmmse_ctx);

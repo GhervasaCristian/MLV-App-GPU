@@ -164,6 +164,7 @@ typedef struct {
     int cpu_cores; /* Default 4 */
 
     /* GPU Context for ST-LMMSE Demosaic */
+    pthread_mutex_t gpu_mutex;
     void * st_lmmse_ctx;
 
 } mlvObject_t;

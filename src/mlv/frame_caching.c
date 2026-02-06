@@ -302,61 +302,29 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
 
-    /* Get the raw data in B&W */
-    getMlvRawFrameFloat(video, frame_index, temp_memory);
-
     wb_convert_info_t wb_info;
 
-    /* WB conversion for ideal debayer result, not for bilinear, easy and non debayer */
-    if( !( debayer_type == 0 || debayer_type == 2 || debayer_type == 3 ) )
+    if (debayer_type == DEBAYER_GPU_LMMSE)
     {
-        wb_convert(&wb_info, temp_memory, width, height, getMlvBlackLevel(video));
-
-        /* CA correction, multithreaded, not for bilinear, easy and non debayer because not visible and slow */
-        if( video->ca_red <= -0.1 || video->ca_red >= 0.1
-         || video->ca_blue <= -0.1 || video->ca_blue >= 0.1 )
+        pthread_mutex_lock(&video->gpu_mutex);
+        
+        /* Re-init context if resolution changed */
+        if(video->st_lmmse_ctx != NULL)
         {
-            /* 2d array for CA correction */
-            float ** __restrict imagefloat2d = (float **)malloc(height * sizeof(float *));
-            for (int y = 0; y < height; ++y) imagefloat2d[y] = (float *)(temp_memory+(y*width));
-
-            /* the magic CA correction function */
-            /*CA_correct_RT(imagefloat2d, 0, 0, width, height,
-                          0, 0, width, height,
-                          0, video->ca_red, video->ca_blue);*/ /*auto, red, blue*/
-
-            lrtpCaCorrect( imagefloat2d, 0, 0, width, height,
-                           0, 0, video->ca_red, video->ca_blue, 0 );
+            if (st_lmmse_get_width(video->st_lmmse_ctx) != width || 
+                st_lmmse_get_height(video->st_lmmse_ctx) != height)
+            {
+                st_lmmse_free_context(video->st_lmmse_ctx);
+                video->st_lmmse_ctx = NULL;
+            }
         }
-    }
 
-    /* Debayer */
-    if (/*debayer_type == 1 ||*/ debayer_type == 4 || debayer_type == 5 || /*debayer_type == 6 ||*/ debayer_type == 7 || debayer_type == 8)
-    {
-        //AMaZE and AHD disabled from librtprocess because of bad artifacts
-        debayerLibRtProcess(output_frame, temp_memory, width, height, debayer_type, video->processing->cam_matrix);
-    }
-    else if (debayer_type == 1 )
-    {
-        debayerAmaze(output_frame, temp_memory, width, height, getMlvCpuCores(video), getMlvBlackLevel(video));
-    }
-    else if(debayer_type == 2 || debayer_type == 3)
-    {
-        /* threaded easy types */
-        debayerEasy(output_frame, temp_memory, width, height, getMlvCpuCores(video), debayer_type);
-    }
-    else if (debayer_type == 6 )
-    {
-        debayerAhd(output_frame, temp_memory, width, height);
-    }
-    else if (debayer_type == DEBAYER_GPU_LMMSE)
-    {
         if(video->st_lmmse_ctx == NULL)
         {
             video->st_lmmse_ctx = st_lmmse_init_context(width, height);
         }
 
-        /* Reuse temp_memory (float*) as scratch for uint16 raw data */
+        /* Use temp_memory as scratch uint16 buffer */
         uint16_t * raw_curr = (uint16_t *)temp_memory;
         getMlvRawFrameUint16(video, frame_index, raw_curr);
         debayerStLmmseUpload(video->st_lmmse_ctx, frame_index, raw_curr);
@@ -365,10 +333,7 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
         
         /* Temporal buffering logic */
         if (algo_mode == 1) {
-            /* Scratch buffer for neighbors (using second half of temp_memory) */
-             /* temp_memory is float* (4 bytes), so it fits 2 * uint16* (2 bytes) frames easily */
-            uint16_t * raw_scratch = raw_curr + (getMlvWidth(video) * getMlvHeight(video));
-            
+            uint16_t * raw_scratch = raw_curr + (width * height);
             uint64_t prev_idx = (frame_index > 0) ? frame_index - 1 : 0;
             uint64_t next_idx = frame_index + 1;
             
@@ -376,8 +341,6 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
                 getMlvRawFrameUint16(video, prev_idx, raw_scratch);
                 debayerStLmmseUpload(video->st_lmmse_ctx, prev_idx, raw_scratch);
             }
-            
-            /* Only fetch next if it exists */
             if (next_idx < getMlvFrames(video)) {
                 if (!debayerStLmmseHasFrame(video->st_lmmse_ctx, next_idx)) {
                     getMlvRawFrameUint16(video, next_idx, raw_scratch);
@@ -387,6 +350,46 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
         }
 
         debayerStLmmseGpu(output_frame, width, height, video->st_lmmse_ctx, frame_index, algo_mode, getMlvBlackLevel(video), getMlvWhiteLevel(video), video->RAWI.raw_info.cfa_pattern);
+        
+        pthread_mutex_unlock(&video->gpu_mutex);
+        return; // Skip WB undo and other CPU steps
+    }
+
+    /* Standard CPU Path */
+    /* Get the raw data in B&W */
+    getMlvRawFrameFloat(video, frame_index, temp_memory);
+
+    /* WB conversion for ideal debayer result, not for bilinear, easy and non debayer */
+    if( !( debayer_type == 0 || debayer_type == 2 || debayer_type == 3 ) )
+    {
+        wb_convert(&wb_info, temp_memory, width, height, getMlvBlackLevel(video));
+        /* ... CA correction ... */
+        if( video->ca_red <= -0.1 || video->ca_red >= 0.1
+         || video->ca_blue <= -0.1 || video->ca_blue >= 0.1 )
+        {
+            float ** __restrict imagefloat2d = (float **)malloc(height * sizeof(float *));
+            for (int y = 0; y < height; ++y) imagefloat2d[y] = (float *)(temp_memory+(y*width));
+            lrtpCaCorrect( imagefloat2d, 0, 0, width, height,
+                           0, 0, video->ca_red, video->ca_blue, 0 );
+        }
+    }
+
+    /* Debayer */
+    if (/*debayer_type == 1 ||*/ debayer_type == 4 || debayer_type == 5 || /*debayer_type == 6 ||*/ debayer_type == 7 || debayer_type == 8)
+    {
+        debayerLibRtProcess(output_frame, temp_memory, width, height, debayer_type, video->processing->cam_matrix);
+    }
+    else if (debayer_type == 1 )
+    {
+        debayerAmaze(output_frame, temp_memory, width, height, getMlvCpuCores(video), getMlvBlackLevel(video));
+    }
+    else if(debayer_type == 2 || debayer_type == 3)
+    {
+        debayerEasy(output_frame, temp_memory, width, height, getMlvCpuCores(video), debayer_type);
+    }
+    else if (debayer_type == 6 )
+    {
+        debayerAhd(output_frame, temp_memory, width, height);
     }
     else
     {

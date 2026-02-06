@@ -131,9 +131,14 @@ win32{
     CUDA_CCBIN =
     !isEmpty(MSVC_BIN_DIR): CUDA_CCBIN = -ccbin \"$$MSVC_BIN_DIR\"
 
+    # Define CUDA source files
+    CUDA_SOURCES += ../../src/debayer/st_lmmse.cu
+
     # Define CUDA Compiler for QMake
     cuda.input = CUDA_SOURCES
-    cuda.output = ${QMAKE_FILE_BASE}.obj
+    cuda.output = ${QMAKE_FILE_BASE}.o
+    cuda.variable_out = OBJECTS
+    cuda.clean = ${QMAKE_FILE_BASE}.o
 
     # Add the CUDA shim to satisfy MSVC/MinGW linker conflicts
     SOURCES += ../../src/debayer/cuda_shim.c
@@ -202,7 +207,6 @@ SOURCES += \
         main.cpp \
         MainWindow.cpp \
     ../../src/debayer/amaze_demosaic.c \
-    ../../src/debayer/debayer_gpu.c \
     ../../src/debayer/debayer.c \
     ../../src/debayer/conv.c \
     ../../src/debayer/basic.c \
@@ -302,7 +306,7 @@ SOURCES += \
     ../../src/librtprocess/src/include/librtprocesswrapper.cpp \
     ../../src/debayer/ahdOld.c
 
-CUDA_SOURCES += ../../src/debayer/st_lmmse.c
+# CUDA sources moved to top configuration block
 
 INCLUDEPATH += ../../src/librtprocess/src/include/
 

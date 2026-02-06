@@ -99,24 +99,66 @@ win32{
     }
     
     # --- CUDA Configuration ---
-    # Detect if CUDA_PATH is set, otherwise default to a common path or assume nvcc is in PATH
     CUDA_DIR = $$(CUDA_PATH)
     isEmpty(CUDA_DIR) {
-        # Try to find nvcc
-        CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1" 
+        # Check standard installation locations
+        exists("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/bin/nvcc.exe"): CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1"
+        else: exists("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin/nvcc.exe"): CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8"
+        else: exists("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.4/bin/nvcc.exe"): CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.4"
+        else: exists("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1/bin/nvcc.exe"): CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.1"
+        else: exists("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8/bin/nvcc.exe"): CUDA_DIR = "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8"
     }
+    
+    # Strip quotes using a safer method
+    CUDA_DIR = $$replace(CUDA_DIR, \", )
+    CUDA_DIR = $$clean_path($$CUDA_DIR)
+    
+    # Find MSVC compiler (cl.exe) for nvcc host compilation
+    # nvcc requires MSVC on Windows, even when using MinGW for the rest of the project.
+    MSVC_BIN_DIR = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64"
+    !exists("$$MSVC_BIN_DIR/cl.exe"): MSVC_BIN_DIR = ""
 
-    # Add libraries
+    message("Selected CUDA_DIR: $$CUDA_DIR")
+    !isEmpty(MSVC_BIN_DIR): message("Using MSVC Host Compiler: $$MSVC_BIN_DIR/cl.exe")
+
+    # Add libraries and includes
+    # Use the import library for the DLL version (cudart.lib) instead of the static library (cudart_static.lib)
+    # to avoid MSVC-specific symbols that confuse the MinGW linker.
     LIBS += -L"$$CUDA_DIR/lib/x64" -lcudart
+    INCLUDEPATH += "$$CUDA_DIR/include"
+
+    # Build CCBIN flag if MSVC found
+    CUDA_CCBIN =
+    !isEmpty(MSVC_BIN_DIR): CUDA_CCBIN = -ccbin \"$$MSVC_BIN_DIR\"
 
     # Define CUDA Compiler for QMake
     cuda.input = CUDA_SOURCES
     cuda.output = ${QMAKE_FILE_BASE}.obj
-    cuda.commands = $$CUDA_DIR/bin/nvcc.exe -c -O3 -arch=sm_50 --use_fast_math -Xcompiler $$join(QMAKE_CXXFLAGS,",") $$join(DEFINES, " -D", "-D") -I. $$join(INCLUDEPATH, '" -I"', '-I"') ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
+
+    # Add the CUDA shim to satisfy MSVC/MinGW linker conflicts
+    SOURCES += ../../src/debayer/cuda_shim.c
+
+    # Filter out MinGW-specific flags that MSVC (cl.exe) doesn't understand
+    # We only pass defines and includes to nvcc
+    CUDA_DEFINES = $$join(DEFINES, " -D", "-D")
+    CUDA_INCLUDES = -I. $$join(INCLUDEPATH, '" -I"', '-I"', '"')
+    
+    # Flags for the host compiler (cl.exe) called by nvcc
+    # /GS- disables buffer security checks (prevents undefined __security_cookie)
+    # /Zc:threadSafeInit- disables thread-safe statics (prevents undefined _Init_thread_epoch)
+    # /MD use multi-threaded DLL version of the CRT (matches most modern CUDA installs)
+    CUDA_HOST_FLAGS = -Xcompiler \"/GS-,/Zc:threadSafeInit-,/MD\"
+
+    # Use explicit escaped quotes to ensure spaces are handled correctly in the generated Makefile
+    # Using -cudart shared to ensure we link against cudart.lib/cudart.dll
+    cuda.commands = \"$$CUDA_DIR/bin/nvcc.exe\" $$CUDA_CCBIN -cudart shared -c -x cu -O3 -arch=sm_86 --use_fast_math $$CUDA_HOST_FLAGS $$CUDA_DEFINES $$CUDA_INCLUDES ${QMAKE_FILE_NAME} -o ${QMAKE_FILE_OUT}
     cuda.dependency_type = TYPE_C
     
     # Add to QMake compilers
     QMAKE_EXTRA_COMPILERS += cuda
+
+    # Some versions of MinGW need this to help with cross-compiler symbol resolution
+    QMAKE_LFLAGS += -flto
 }
 
 # Win64 static: install msys2 to the default location C:\msys64, install qt $ pacman -S mingw-w64-x86_64-qt5-static, then set up qt-creator accordingly.
@@ -263,7 +305,7 @@ SOURCES += \
     ../../src/librtprocess/src/include/librtprocesswrapper.cpp \
     ../../src/debayer/ahdOld.c
 
-CUDA_SOURCES += ../../src/debayer/st_lmmse.cu
+CUDA_SOURCES += ../../src/debayer/st_lmmse.c
 
 INCLUDEPATH += ../../src/librtprocess/src/include/
 

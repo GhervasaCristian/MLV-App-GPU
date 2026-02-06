@@ -2,7 +2,6 @@
 #define ST_LMMSE_H
 
 #include <stdint.h>
-#include "../mlv/video_mlv.h"
 
 #ifdef __cplusplus
 extern "C" {

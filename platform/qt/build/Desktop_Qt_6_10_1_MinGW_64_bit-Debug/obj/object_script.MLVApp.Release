@@ -1,4 +1,5 @@
 st_lmmse.obj
+obj/cuda_shim.o
 obj/ClipInformation.o
 obj/RenameDialog.o
 obj/SessionModel.o

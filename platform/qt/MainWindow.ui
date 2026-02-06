@@ -10582,6 +10582,14 @@ QGroupBox::indicator:checked:disabled {
     <string>LMMSE</string>
    </property>
   </action>
+  <action name="actionUseGpuLmmseDebayer">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>GPU LMMSE</string>
+   </property>
+  </action>
   <action name="actionUseIgvDebayer">
    <property name="checkable">
     <bool>true</bool>

@@ -111,6 +111,7 @@ public:
     QAction *actionUseNoneDebayer;
     QAction *actionUseSimpleDebayer;
     QAction *actionUseLmmseDebayer;
+    QAction *actionUseGpuLmmseDebayer;
     QAction *actionUseIgvDebayer;
     QAction *actionFcpxmlImportAssistant;
     QAction *actionHelp;
@@ -984,6 +985,9 @@ public:
         actionUseLmmseDebayer = new QAction(MainWindow);
         actionUseLmmseDebayer->setObjectName("actionUseLmmseDebayer");
         actionUseLmmseDebayer->setCheckable(true);
+        actionUseGpuLmmseDebayer = new QAction(MainWindow);
+        actionUseGpuLmmseDebayer->setObjectName("actionUseGpuLmmseDebayer");
+        actionUseGpuLmmseDebayer->setCheckable(true);
         actionUseIgvDebayer = new QAction(MainWindow);
         actionUseIgvDebayer->setObjectName("actionUseIgvDebayer");
         actionUseIgvDebayer->setCheckable(true);
@@ -5589,6 +5593,7 @@ public:
         menuDemosaicForPlayback->addAction(actionUseSimpleDebayer);
         menuDemosaicForPlayback->addAction(actionUseBilinear);
         menuDemosaicForPlayback->addAction(actionUseLmmseDebayer);
+        menuDemosaicForPlayback->addAction(actionUseGpuLmmseDebayer);
         menuDemosaicForPlayback->addAction(actionUseIgvDebayer);
         menuDemosaicForPlayback->addAction(actionAlwaysUseAMaZE);
         menuDemosaicForPlayback->addAction(actionUseAhdDebayer);
@@ -5936,6 +5941,7 @@ public:
         actionUseNoneDebayer->setText(QCoreApplication::translate("MainWindow", "None (monochrome)", nullptr));
         actionUseSimpleDebayer->setText(QCoreApplication::translate("MainWindow", "Simple", nullptr));
         actionUseLmmseDebayer->setText(QCoreApplication::translate("MainWindow", "LMMSE", nullptr));
+        actionUseGpuLmmseDebayer->setText(QCoreApplication::translate("MainWindow", "GPU LMMSE", nullptr));
         actionUseIgvDebayer->setText(QCoreApplication::translate("MainWindow", "IGV", nullptr));
         actionFcpxmlImportAssistant->setText(QCoreApplication::translate("MainWindow", "FCPXML Import Assistant", nullptr));
 #if QT_CONFIG(tooltip)

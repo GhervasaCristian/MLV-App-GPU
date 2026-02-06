@@ -358,8 +358,8 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
 
         /* Reuse temp_memory (float*) as scratch for uint16 raw data */
         uint16_t * raw_curr = (uint16_t *)temp_memory;
-        getMlvRawFrameUint16(video, frameIndex, raw_curr);
-        debayerStLmmseUpload(video->st_lmmse_ctx, frameIndex, raw_curr);
+        getMlvRawFrameUint16(video, frame_index, raw_curr);
+        debayerStLmmseUpload(video->st_lmmse_ctx, frame_index, raw_curr);
 
         int algo_mode = 0; /* Preview mode 0, Final 1 - TODO: pass via arg */
         
@@ -367,10 +367,10 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
         if (algo_mode == 1) {
             /* Scratch buffer for neighbors (using second half of temp_memory) */
              /* temp_memory is float* (4 bytes), so it fits 2 * uint16* (2 bytes) frames easily */
-            uint16_t * raw_scratch = raw_curr + (width * height);
+            uint16_t * raw_scratch = raw_curr + (getMlvWidth(video) * getMlvHeight(video));
             
-            uint64_t prev_idx = (frameIndex > 0) ? frameIndex - 1 : 0;
-            uint64_t next_idx = frameIndex + 1;
+            uint64_t prev_idx = (frame_index > 0) ? frame_index - 1 : 0;
+            uint64_t next_idx = frame_index + 1;
             
             if (!debayerStLmmseHasFrame(video->st_lmmse_ctx, prev_idx)) {
                 getMlvRawFrameUint16(video, prev_idx, raw_scratch);
@@ -378,7 +378,7 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
             }
             
             /* Only fetch next if it exists */
-            if (next_idx < video->frames) {
+            if (next_idx < getMlvFrames(video)) {
                 if (!debayerStLmmseHasFrame(video->st_lmmse_ctx, next_idx)) {
                     getMlvRawFrameUint16(video, next_idx, raw_scratch);
                     debayerStLmmseUpload(video->st_lmmse_ctx, next_idx, raw_scratch);
@@ -386,7 +386,7 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
             }
         }
 
-        debayerStLmmseGpu(output_frame, width, height, video->st_lmmse_ctx, frameIndex, algo_mode, getMlvBlackLevel(video), getMlvWhiteLevel(video), video->RAWI.raw_info.cfa_pattern);
+        debayerStLmmseGpu(output_frame, width, height, video->st_lmmse_ctx, frame_index, algo_mode, getMlvBlackLevel(video), getMlvWhiteLevel(video), video->RAWI.raw_info.cfa_pattern);
     }
     else
     {

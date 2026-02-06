@@ -13,7 +13,7 @@ void debayerStLmmseUpload(void* gpu_context, uint64_t frame_index, uint16_t* raw
 void debayerStLmmseGpu(uint16_t * __restrict debayerto, int width, int height, void* gpu_context, uint64_t frame_index, int algo_mode, int black, int white, int cfa_pattern)
 {
     // If context is managed externally (in mlvObject), we assume it's valid or checked before call.
-    // However, the actual CUDA calls are in st_lmmse.cu.
+    // However, the actual CUDA calls are in st_lmmse.c.
     // This function acts as the bridge if needed, but since we are calling st_lmmse_process_frame directly from frame_caching or via this wrapper.
     
     // We can just call the handle directly

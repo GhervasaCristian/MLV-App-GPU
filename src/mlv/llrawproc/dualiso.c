@@ -2125,6 +2125,13 @@ int diso_get_full20bit(struct raw_info raw_info, uint16_t * image_data, int dark
     {
         memcpy(is_bright, iso_patterns[*iso_pattern - 1], sizeof(is_bright));
     }
+    else if (*iso_pattern == 5)
+    {
+        if (!identify_bright_and_dark_fields(raw_info, image_data, rggb, is_bright))
+        {
+            memcpy(is_bright, iso_patterns[0], sizeof(is_bright));
+        }
+    }
     else
     {
         return 0;

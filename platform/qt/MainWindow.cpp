@@ -1482,8 +1482,8 @@ void MainWindow::initGui( void )
     ui->actionShowInFinder->setToolTip( tr( "Reveal selected file in Explorer" ) );
 #endif
 #ifdef Q_OS_LINUX
-    ui->actionShowInFinder->setText( tr( "Reveal in Nautilus" ) );
-    ui->actionShowInFinder->setToolTip( tr( "Reveal selected file in Nautilus" ) );
+    ui->actionShowInFinder->setText( tr( "Reveal in file browser" ) );
+    ui->actionShowInFinder->setToolTip( tr( "Reveal selected file in file browser" ) );
 #endif
 
     //set CPU Usage
@@ -5305,14 +5305,35 @@ void MainWindow::previewPicture( int row )
     //disable low level raw fixes for preview
     m_pMlvObject->llrawproc->fix_raw = 0;
 
-    //Get frame from library
-    getMlvProcessedFrame8( m_pMlvObject, 0, m_pRawImage, QThread::idealThreadCount() );
+    // Get proper image size
+    int raw_w = m_pMlvObject->RAWI.xRes;
+    int raw_h = m_pMlvObject->RAWI.yRes;
+    int downscaled_factor = 1;
 
-    //Display in SessionList
-    QPixmap pic = QPixmap::fromImage( QImage( ( unsigned char *) m_pRawImage, getMlvWidth(m_pMlvObject), getMlvHeight(m_pMlvObject), QImage::Format_RGB888 )
-                                      .scaled( getMlvWidth(m_pMlvObject) * devicePixelRatio() / 10.0 * getHorizontalStretchFactor(true),
-                                               getMlvHeight(m_pMlvObject) * devicePixelRatio() / 10.0 * getVerticalStretchFactor(true),
-                                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation) );
+    if (raw_w > 2000 && raw_h > 1500) downscaled_factor = 9;
+    else if (raw_w < 2000 && raw_h < 1500) downscaled_factor = 5;
+    else downscaled_factor = 7;
+
+    int width = raw_w / downscaled_factor;
+    int height = raw_h / downscaled_factor;
+
+    //Get frame from library
+    //create_thumbnail( m_pMlvObject, m_pRawImage, downscaled_factor, width, height, QThread::idealThreadCount() );
+    get_area_average_downscale_thumnail(m_pMlvObject, 0, downscaled_factor, QThread::idealThreadCount(), m_pRawImage);
+
+    QImage img( m_pRawImage,
+                width,
+                height,
+                width * 3,
+                QImage::Format_RGB888 );
+
+    QPixmap pic = QPixmap::fromImage( img.scaled(
+                        width * getHorizontalStretchFactor(true),
+                        height * getVerticalStretchFactor(true),
+                        Qt::IgnoreAspectRatio,
+                        Qt::SmoothTransformation)
+                    );
+
     pic.setDevicePixelRatio( devicePixelRatio() );
     m_pModel->setData( m_pModel->index( row, 0, QModelIndex() ), QIcon( pic ), Qt::DecorationRole );
 
@@ -10487,7 +10508,7 @@ void MainWindow::on_actionShowInFinder_triggered( void )
     QProcess::execute("/usr/bin/osascript", {"-e", "tell application \"Finder\" to reveal POSIX file \"" + path + "\""});
     QProcess::execute("/usr/bin/osascript", {"-e", "tell application \"Finder\" to activate"});
 #elif defined( Q_OS_LINUX )
-    QProcess::startDetached(QString( "/usr/bin/nautilus \"%1\"" ).arg( QDir::toNativeSeparators(path) ) );
+    QProcess::startDetached("xdg-open", {QFileInfo(path).absolutePath()});
 #endif
 }
 

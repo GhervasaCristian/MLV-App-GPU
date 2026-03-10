@@ -214,6 +214,7 @@ SOURCES += \
     ../../src/matrix/matrix.c \
     ../../src/mlv/frame_caching.c \
     ../../src/mlv/video_mlv.c \
+    ../../src/mlv/video_mlv_misc.c \
     ../../src/mlv/liblj92/lj92.c \
     ../../src/mlv/llrawproc/llrawproc.c \
     ../../src/mlv/llrawproc/pixelproc.c \
@@ -223,6 +224,7 @@ SOURCES += \
     ../../src/mlv/llrawproc/hist.c \
     ../../src/mlv/camid/camera_id.c \   
     ../../src/mlv/mcraw/mcraw.c \
+    ../../src/mlv/mcraw/cJSON.c \
     ../../src/mlv/mcraw/RawData.cpp \
     ../../src/mlv/mcraw/RawData_Legacy.cpp \
     ../../src/processing/processing.c \
@@ -324,6 +326,8 @@ HEADERS += MainWindow.h \
     ../../src/mlv/mlv_object.h \
     ../../src/mlv/raw.h \
     ../../src/mlv/video_mlv.h \
+    ../../src/mlv/mcraw/mcraw.h \
+    ../../src/mlv/mcraw/cJSON.h \
     ../../src/mlv/liblj92/lj92.h \
     ../../src/mlv/llrawproc/llrawproc_object.h \
     ../../src/mlv/llrawproc/llrawproc.h \
@@ -507,11 +511,11 @@ ICON_FILES.path = Contents/Resources
 QMAKE_BUNDLE_DATA += ICON_FILES
 
 #unpack & install ffmpeg on OSX
-macx: QMAKE_POST_LINK += unzip -o ../qt/FFmpeg/ffmpegOSX.zip $$escape_expand(\n\t)
+macx: QMAKE_POST_LINK += unzip -o $$quote($$PWD/../qt/FFmpeg/ffmpegOSX.zip) $$escape_expand(\n\t)
 macx: QMAKE_POST_LINK += "mv ffmpeg MLV\ App.app/Contents/MacOS/" $$escape_expand(\n\t)
 #unpack & install raw2mlv on OSX
-macx: equals(QT_ARCH, arm64): QMAKE_POST_LINK += unzip -o ../qt/raw2mlv/raw2mlvMacOsArm.zip $$escape_expand(\n\t)
-macx: equals(QT_ARCH, x86_64): QMAKE_POST_LINK += unzip -o ../qt/raw2mlv/raw2mlvOSX.zip $$escape_expand(\n\t)
+macx: equals(QT_ARCH, arm64): QMAKE_POST_LINK += unzip -o $$quote($$PWD/../qt/raw2mlv/raw2mlvMacOsArm.zip) $$escape_expand(\n\t)
+macx: equals(QT_ARCH, x86_64): QMAKE_POST_LINK += unzip -o $$quote($$PWD/../qt/raw2mlv/raw2mlvOSX.zip) $$escape_expand(\n\t)
 macx: QMAKE_POST_LINK += "mv raw2mlv MLV\ App.app/Contents/MacOS/" $$escape_expand(\n\t)
 
 unix{

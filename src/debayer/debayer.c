@@ -5,6 +5,7 @@
 #include <pthread.h>
 
 #include "debayer.h"
+#include "opencl_debayer.h"
 #include "librtprocesswrapper.h"
 
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
@@ -428,4 +429,20 @@ void debayerLibRtProcess(uint16_t *debayerto, float *bayerdata, int width, int h
     free(blue1d);
     free(blue2d);
     free(imagefloat2d);
+}
+
+/* GPU Demosaic implementations */
+int debayerGpu(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern, int algorithm)
+{
+    return opencl_debayer_process(debayerto, bayerdata, width, height, black, white, cfa_pattern, algorithm);
+}
+
+int debayerGpuMultiGradient(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern)
+{
+    return opencl_debayer_process(debayerto, bayerdata, width, height, black, white, cfa_pattern, GPU_DEBAYER_FAST);
+}
+
+int debayerGpuRcd(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern)
+{
+    return opencl_debayer_process(debayerto, bayerdata, width, height, black, white, cfa_pattern, GPU_DEBAYER_CINEMA);
 }

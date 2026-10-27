@@ -104,6 +104,12 @@
 #define setMlvUseRcdDebayer(video) (video)->use_amaze = 7; (video)->current_cached_frame_active = 0
 /* Use the DCB debayer */
 #define setMlvUseDcbDebayer(video) (video)->use_amaze = 8; (video)->current_cached_frame_active = 0
+/* Use the GPU Fast (Multi-Gradient) debayer */
+#define setMlvUseGpuFastDebayer(video) (video)->use_amaze = 10; (video)->current_cached_frame_active = 0
+/* Use the GPU Cinema (RCD) debayer */
+#define setMlvUseGpuCinemaDebayer(video) (video)->use_amaze = 11; (video)->current_cached_frame_active = 0
+#define setMlvUseGpuDebayer(video) setMlvUseGpuFastDebayer(video)
+#define setMlvUseGpuLmmseDebayer(video) setMlvUseGpuFastDebayer(video)
 
 /* Set CA correction parameters */
 #define setMlvCaCorrectionRed(video, value) (video)->ca_red = (value)

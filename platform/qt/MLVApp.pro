@@ -166,6 +166,9 @@ SOURCES += \
     ../../src/debayer/debayer.c \
     ../../src/debayer/conv.c \
     ../../src/debayer/basic.c \
+    ../../src/debayer/opencl_loader.c \
+    ../../src/debayer/opencl_debayer.c \
+    ../../src/debayer/gpu_pipeline.c \
     ../../src/ca_correct/CA_correct_RT.c \
     ../../src/matrix/matrix.c \
     ../../src/mlv/frame_caching.c \
@@ -314,6 +317,12 @@ macx: SOURCES += ../cocoa/avf_lib/avf_lib.m
 
 HEADERS += MainWindow.h \
     ../../src/debayer/debayer.h \
+    ../../src/debayer/opencl_loader.h \
+    ../../src/debayer/opencl_debayer.h \
+    ../../src/debayer/gpu_pipeline.h \
+    ../../src/debayer/opencl_multigradient_kernels.h \
+    ../../src/debayer/opencl_rcd_kernels.h \
+    ../../src/debayer/opencl_dualiso_kernels.h \
     ../../src/debayer/helpersse2.h \
     ../../src/debayer/conv.h \
     ../../src/debayer/basic.h \

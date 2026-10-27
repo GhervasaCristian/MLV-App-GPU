@@ -7,6 +7,7 @@
 
 #include "video_mlv.h"
 #include "../debayer/debayer.h"
+#include "../debayer/gpu_pipeline.h"
 #include "../ca_correct/CA_correct_RT.h"
 #include "../debayer/wb_conversion.h"
 
@@ -300,6 +301,15 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
 {
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
+
+    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA)
+    {
+        int algo = (debayer_type == DEBAYER_GPU_CINEMA) ? GPU_ALGO_CINEMA : GPU_ALGO_FAST;
+        if (gpu_pipeline_process_frame(video, frame_index, output_frame, algo))
+        {
+            return;
+        }
+    }
 
     /* Get the raw data in B&W */
     getMlvRawFrameFloat(video, frame_index, temp_memory);

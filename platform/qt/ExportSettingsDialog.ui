@@ -319,6 +319,16 @@
             <string>Force IGV</string>
            </property>
           </item>
+           <item>
+            <property name="text">
+             <string>Force GPU Fast (Multi-Gradient)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Force GPU Cinema (RCD)</string>
+            </property>
+           </item>
           <item>
            <property name="text">
             <string>Receipt configuration</string>

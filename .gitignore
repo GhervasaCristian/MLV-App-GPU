@@ -38,3 +38,14 @@ osx_installer/create-dmg-master/builder/create-dmg.builder
 platform/build-*
 *build*
 .qtcreator
+
+# Qt build artifacts
+platform/qt/.qmake.stash
+platform/qt/MLVApp_resource.rc
+platform/qt/Makefile*
+platform/qt/moc/
+platform/qt/obj/
+platform/qt/rcc/
+platform/qt/release/
+platform/qt/debug/
+platform/qt/ui/

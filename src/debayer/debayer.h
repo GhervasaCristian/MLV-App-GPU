@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Easy debayer types */
 void debayerEasy(uint16_t * __restrict debayerto, float * __restrict bayerdata, int width, int height, int threads, int type);
 /* Quite quick bilinear debayer, floating point sadly; threads argument is unused */
@@ -44,5 +48,19 @@ __attribute__ ((force_align_arg_pointer))
 
 /*AMaZE algo*/
 demosaic(amazeinfo_t * inputdata);
+
+/* GPU Parallel Demosaic (OpenCL) */
+#define DEBAYER_GPU 10
+#define DEBAYER_GPU_FAST 10
+#define DEBAYER_GPU_CINEMA 11
+#define DEBAYER_GPU_LMMSE 10 /* Alias for compatibility */
+
+int debayerGpu(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern, int algorithm);
+int debayerGpuMultiGradient(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern);
+int debayerGpuRcd(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

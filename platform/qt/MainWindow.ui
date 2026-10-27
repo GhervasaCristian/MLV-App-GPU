@@ -199,6 +199,7 @@
      <addaction name="actionUseSimpleDebayer"/>
      <addaction name="actionUseBilinear"/>
      <addaction name="actionUseLmmseDebayer"/>
+     <addaction name="actionUseGpuLmmseDebayer"/>
      <addaction name="actionUseIgvDebayer"/>
      <addaction name="actionAlwaysUseAMaZE"/>
      <addaction name="actionUseAhdDebayer"/>
@@ -2976,6 +2977,11 @@ QGroupBox::indicator:checked:disabled {
                      <string>DCB</string>
                     </property>
                    </item>
+                    <item>
+                     <property name="text">
+                      <string>GPU (OpenCL)</string>
+                     </property>
+                    </item>
                   </widget>
                  </item>
                 </layout>
@@ -10780,6 +10786,14 @@ QGroupBox::indicator:checked:disabled {
    </property>
    <property name="text">
     <string>LMMSE</string>
+   </property>
+  </action>
+  <action name="actionUseGpuLmmseDebayer">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>GPU (OpenCL)</string>
    </property>
   </action>
   <action name="actionUseIgvDebayer">

@@ -76,6 +76,8 @@ extern "C" {
 #endif
 
 #include <../../src/mlv/camid/camera_id.h>
+#include "../../src/debayer/gpu_pipeline.h"
+#include "../../src/debayer/opencl_debayer.h"
 extern const char* camidGetCameraName(uint32_t cameraModel, int camname_type);
 
 #ifdef __cplusplus
@@ -246,6 +248,7 @@ MainWindow::~MainWindow()
     delete m_pGradientElement;
     delete m_pStatusDialog;
     delete m_pInfoDialog;
+    gpu_pipeline_free();
     delete ui;
 }
 
@@ -765,7 +768,7 @@ void MainWindow::on_actionOpen_triggered()
     if( !QDir( path ).exists() ) path = QDir::homePath();
 
     //Open File Dialog
-    QStringList files = QFileDialog::getOpenFileNames( this, tr("Open one or more MLV…"),
+    QStringList files = QFileDialog::getOpenFileNames( this, tr("Open one or more MLVÃ¢â‚¬Â¦"),
                                                     path,
                                                     tr("Video (*.mlv *.MLV *.mcraw *.MCRAW)") );
 
@@ -958,14 +961,14 @@ int MainWindow::openMlv( QString fileName )
 
     ACTIVE_CLIP->updateMetadata( QString( "%1" ).arg( (char*)getMlvCamera( m_pMlvObject ) ),
                                  QString( "%1" ).arg( (char*)getMlvLens( m_pMlvObject ) ),
-                                 QString( "%1 × %2 pixels" ).arg( (int)getMlvWidth( m_pMlvObject ) ).arg( (int)getMlvHeight( m_pMlvObject ) ),
+                                 QString( "%1 Ãƒâ€” %2 pixels" ).arg( (int)getMlvWidth( m_pMlvObject ) ).arg( (int)getMlvHeight( m_pMlvObject ) ),
                                  QString( "%1" ).arg( m_pTimeCodeImage->getTimeCodeFromFps( (int)getMlvFrames( m_pMlvObject ), getMlvFramerate( m_pMlvObject ) ) ),
                                  QString( "%1" ).arg( (int)getMlvFrames( m_pMlvObject ) ),
                                  QString( "%1 fps" ).arg( getMlvFramerate( m_pMlvObject ) ),
                                  QString( "%1 mm" ).arg( getMlvFocalLength( m_pMlvObject ) ),
                                  QString( "%1" ).arg( focusDistStr ),
-                                 QString( "1/%1 s,  %2 deg,  %3 µs" ).arg( (uint16_t)(shutterSpeed + 0.5f) ).arg( (uint16_t)(shutterAngle + 0.5f) ).arg( getMlvShutter( m_pMlvObject ) ),
-                                 QString( "ƒ/%1" ).arg( getMlvAperture( m_pMlvObject ) / 100.0, 0, 'f', 1 ),
+                                 QString( "1/%1 s,  %2 deg,  %3 Ã‚Âµs" ).arg( (uint16_t)(shutterSpeed + 0.5f) ).arg( (uint16_t)(shutterAngle + 0.5f) ).arg( getMlvShutter( m_pMlvObject ) ),
+                                 QString( "Ã†â€™/%1" ).arg( getMlvAperture( m_pMlvObject ) / 100.0, 0, 'f', 1 ),
                                  isoInfo,
                                  dualIso,
                                  QString( "%1 bits,  %2" ).arg( getLosslessBpp( m_pMlvObject ) ).arg( getMlvCompression( m_pMlvObject ) ),
@@ -1022,6 +1025,10 @@ int MainWindow::openMlv( QString fileName )
     else if( ui->actionUseLmmseDebayer->isChecked() )
     {
         setMlvUseLmmseDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseGpuLmmseDebayer->isChecked() )
+    {
+        setMlvUseGpuLmmseDebayer( m_pMlvObject );
     }
     else if( ui->actionUseIgvDebayer->isChecked() )
     {
@@ -1207,6 +1214,7 @@ void MainWindow::initGui( void )
     m_previewDebayerGroup->addAction( ui->actionUseAhdDebayer );
     m_previewDebayerGroup->addAction( ui->actionUseRcdDebayer );
     m_previewDebayerGroup->addAction( ui->actionUseDcbDebayer );
+    m_previewDebayerGroup->addAction( ui->actionUseGpuLmmseDebayer );
     m_previewDebayerGroup->addAction( ui->actionAlwaysUseAMaZE );
     m_previewDebayerGroup->addAction( ui->actionCaching );
     m_previewDebayerGroup->addAction( ui->actionDontSwitchDebayerForPlayback );
@@ -1546,6 +1554,7 @@ void MainWindow::initLib( void )
     //qDebug() << "Set m_cacheSizeMB to:" << m_cacheSizeMB << "MB of" << maxRam << "MB of total Memory";
 
     /* Initialise the MLV object so it is actually useful */
+    gpu_pipeline_init();
     m_pMlvObject = initMlvObject();
     /* Intialise the processing settings object */
     m_pProcessingObject = initProcessingObject();
@@ -1591,7 +1600,7 @@ void MainWindow::readSettings()
     m_lastLutFileName = set.value( "lastLutFile", QDir::homePath() ).toString();
     m_codecProfile = set.value( "codecProfile", 4 ).toUInt();
     m_codecOption = set.value( "codecOption", 0 ).toUInt();
-    m_exportDebayerMode = set.value( "exportDebayerMode", 4 ).toUInt();
+    m_exportDebayerMode = set.value( "exportDebayerMode", 5 ).toUInt();
     m_previewMode = set.value( "previewMode", 1 ).toUInt();
     switch( m_previewMode )
     {
@@ -1744,7 +1753,7 @@ int MainWindow::confirmAbort( void )
 
     int abortExport = QMessageBox::warning(
         this,
-        tr( "%1 – Abort Export" ).arg( APPNAME ),
+        tr( "%1 Ã¢â‚¬â€œ Abort Export" ).arg( APPNAME ),
         tr( "Are you sure you want to abort export?" ),
         tr( "Continue export" ),
         tr( "Abort export" ),
@@ -1809,6 +1818,14 @@ void MainWindow::startExportPipe(QString fileName)
     {
         setMlvUseIgvDebayer( m_pMlvObject );
     }
+    else if( m_exportDebayerMode == 4 )
+    {
+        setMlvUseGpuFastDebayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 5 )
+    {
+        setMlvUseGpuCinemaDebayer( m_pMlvObject );
+    }
     else
     {
         switch( m_exportQueue.first()->debayer() )
@@ -1839,6 +1856,12 @@ void MainWindow::startExportPipe(QString fileName)
             break;
         case ReceiptSettings::DCB:
             setMlvUseDcbDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_FAST:
+            setMlvUseGpuFastDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA:
+            setMlvUseGpuCinemaDebayer( m_pMlvObject );
             break;
         default:
             break;
@@ -1905,7 +1928,7 @@ void MainWindow::startExportPipe(QString fileName)
 
             //Then show error
             int ret = QMessageBox::critical( this,
-                                             tr( "%1 – Export file error" ).arg( APPNAME ),
+                                             tr( "%1 Ã¢â‚¬â€œ Export file error" ).arg( APPNAME ),
                                              tr( "No audio track available in MLV for export.\nHow do you like to proceed?" ),
                                              tr( "Continue" ),
                                              tr( "Abort batch export" ),
@@ -3034,10 +3057,10 @@ void MainWindow::startExportCdng(QString fileName)
      * could be used to achieve a more even, round-robin
      * distribution of frames across threads:
      *
-     * T0 → 0, 4, 8, 12, ...
-     * T1 → 1, 5, 9, 13, ...
-     * T2 → 2, 6, 10, 14, ...
-     * T3 → 3, 7, 11, 15, ...
+     * T0 Ã¢â€ â€™ 0, 4, 8, 12, ...
+     * T1 Ã¢â€ â€™ 1, 5, 9, 13, ...
+     * T2 Ã¢â€ â€™ 2, 6, 10, 14, ...
+     * T3 Ã¢â€ â€™ 3, 7, 11, 15, ...
      * ...
      *
      * However, schedule(dynamic) is used to improve load
@@ -3168,7 +3191,7 @@ void MainWindow::startExportCdng(QString fileName)
 
         int abortBatch = QMessageBox::critical(
             this,
-            tr( "%1 – Export file error" ).arg( APPNAME ),
+            tr( "%1 Ã¢â‚¬â€œ Export file error" ).arg( APPNAME ),
 
             tr( "Error exporting frame %1 from %2 clip.\nHow do you like to proceed?" )
                 .arg( errorFrame.load() )
@@ -3268,7 +3291,7 @@ void MainWindow::startExportMlv(QString fileName)
             QFile( pathName ).remove();
 
             ret = QMessageBox::critical( this,
-                                         tr( "%1 – Export file error" ).arg( APPNAME ),
+                                         tr( "%1 Ã¢â‚¬â€œ Export file error" ).arg( APPNAME ),
                                          tr( "%1" ).arg( errorMessage ),
                                          tr( "Abort current export" ),
                                          tr( "Abort batch export" ),
@@ -3325,6 +3348,14 @@ void MainWindow::startExportAVFoundation(QString fileName)
     {
         setMlvUseIgvDebayer( m_pMlvObject );
     }
+    else if( m_exportDebayerMode == 4 )
+    {
+        setMlvUseGpuFastDebayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 5 )
+    {
+        setMlvUseGpuCinemaDebayer( m_pMlvObject );
+    }
     else
     {
         switch( m_exportQueue.first()->debayer() )
@@ -3355,6 +3386,12 @@ void MainWindow::startExportAVFoundation(QString fileName)
             break;
         case ReceiptSettings::DCB:
             setMlvUseDcbDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_FAST:
+            setMlvUseGpuFastDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA:
+            setMlvUseGpuCinemaDebayer( m_pMlvObject );
             break;
         default:
             break;
@@ -4736,10 +4773,10 @@ void MainWindow::deleteSession()
 
     for( int i = 0; i < rowCount; i++ )
     {
-        m_pInfoDialog->ui->tableWidget->item( i, 1 )->setText( "–" );
+        m_pInfoDialog->ui->tableWidget->item( i, 1 )->setText( "Ã¢â‚¬â€œ" );
     }
 
-    ui->label_resResolution->setText( "0 × 0 pixels" );
+    ui->label_resResolution->setText( "0 Ãƒâ€” 0 pixels" );
 
     //Adapt slider to clip and move to position 0
     ui->horizontalSliderPosition->setValue( 0 );
@@ -5485,7 +5522,7 @@ void MainWindow::addClipToExportQueue(int row, QString fileName)
     //A file must be opened once before being able to be exported
     if( GET_RECEIPT( row )->wasNeverLoaded() )
     {
-        m_pStatusDialog->ui->label->setText( tr( "Preparing export…" ) );
+        m_pStatusDialog->ui->label->setText( tr( "Preparing exportÃ¢â‚¬Â¦" ) );
         m_pStatusDialog->ui->labelEstimatedTime->setText( "" );
         m_pStatusDialog->ui->progressBar->setMaximum( 0 );
         m_pStatusDialog->ui->progressBar->setValue( 0 );
@@ -7218,7 +7255,7 @@ void MainWindow::on_actionExport_triggered()
      && !isExportSequence() )
     {
         //File Dialog
-        QString fileName = QFileDialog::getSaveFileName( this, tr("Export…"),
+        QString fileName = QFileDialog::getSaveFileName( this, tr("ExportÃ¢â‚¬Â¦"),
                                                         saveFileName,
                                                         fileType );
 
@@ -7259,7 +7296,7 @@ void MainWindow::on_actionExport_triggered()
                 fileName.prepend( "/" );
                 fileName.prepend( folderName );
 
-                if( QDir( fileName ).exists() ) overwriteList.append( fileName.append( "/…" ) );
+                if( QDir( fileName ).exists() ) overwriteList.append( fileName.append( "/Ã¢â‚¬Â¦" ) );
             }
             //Clips
             else
@@ -7557,7 +7594,7 @@ void MainWindow::resultingResolution( void )
     if( !SESSION_CLIP_COUNT ) return;
     int x = getMlvWidth( m_pMlvObject ) * getHorizontalStretchFactor( false );
     int y = getMlvHeight( m_pMlvObject ) * getVerticalStretchFactor( false );
-    ui->label_resResolution->setText( QString( "%1 × %2 pixels" ).arg( x ).arg( y ) );
+    ui->label_resResolution->setText( QString( "%1 Ãƒâ€” %2 pixels" ).arg( x ).arg( y ) );
 }
 
 //Is the current export setting set to sequnce?
@@ -7668,6 +7705,12 @@ void MainWindow::on_actionUseBilinear_triggered()
 
 //Use LMMSE debayer
 void MainWindow::on_actionUseLmmseDebayer_triggered()
+{
+    selectDebayerAlgorithm();
+    return;
+}
+
+void MainWindow::on_actionUseGpuLmmseDebayer_triggered()
 {
     selectDebayerAlgorithm();
     return;
@@ -8122,7 +8165,7 @@ void MainWindow::deleteFileFromSession( void )
     //Ask for options
     QMessageBox msg;
     msg.setIcon( QMessageBox::Question );
-    msg.setWindowTitle( tr( "%1 – Remove clip" ).arg( APPNAME ) );
+    msg.setWindowTitle( tr( "%1 Ã¢â‚¬â€œ Remove clip" ).arg( APPNAME ) );
     msg.setText( tr( "Remove clip from session, or delete clip from disk?" ) );
     msg.addButton(tr("Remove"), QMessageBox::ApplyRole);
     QPushButton *deleteButton = msg.addButton(tr("Delete from Disk"), QMessageBox::ActionRole);
@@ -8153,16 +8196,17 @@ void MainWindow::deleteFileFromSession( void )
             m_fileLoaded = false;
             m_dontDraw = true;
             freeMlvObject( m_pMlvObject );
-            m_pMlvObject = initMlvObject();
+            gpu_pipeline_init();
+    m_pMlvObject = initMlvObject();
 #endif
-            if( MoveToTrash( GET_RECEIPT(row)->fileName() ) ) QMessageBox::critical( this, tr( "%1 – Delete clip from disk" ).arg( APPNAME ), tr( "Delete clip failed!" ) );
+            if( MoveToTrash( GET_RECEIPT(row)->fileName() ) ) QMessageBox::critical( this, tr( "%1 Ã¢â‚¬â€œ Delete clip from disk" ).arg( APPNAME ), tr( "Delete clip failed!" ) );
             //MAPP
             QString mappName = GET_RECEIPT(row)->fileName();
             mappName.chop( 4 );
             mappName.append( ".MAPP" );
             if( QFileInfo( mappName ).exists() )
             {
-                if( MoveToTrash( mappName ) ) QMessageBox::critical( this, tr( "%1 – Delete MAPP file from disk" ).arg( APPNAME ), tr( "Delete MAPP file failed!" ) );
+                if( MoveToTrash( mappName ) ) QMessageBox::critical( this, tr( "%1 Ã¢â‚¬â€œ Delete MAPP file from disk" ).arg( APPNAME ), tr( "Delete MAPP file failed!" ) );
             }
             //M00..M99
             mappName.chop( 1 );
@@ -8172,7 +8216,7 @@ void MainWindow::deleteFileFromSession( void )
                 mappName.append( QString( "%1" ).arg( nr, 2, 10, QChar( '0' ) ) );
                 if( QFileInfo( mappName ).exists() )
                 {
-                    if( MoveToTrash( mappName ) ) QMessageBox::critical( this, tr( "%1 – Delete M%2 file from disk" ).arg( APPNAME ).arg( nr, 2, 10, QChar( '0' ) ), tr( "Delete M%1 file failed!" ).arg( nr, 2, 10, QChar( '0' ) ) );
+                    if( MoveToTrash( mappName ) ) QMessageBox::critical( this, tr( "%1 Ã¢â‚¬â€œ Delete M%2 file from disk" ).arg( APPNAME ).arg( nr, 2, 10, QChar( '0' ) ), tr( "Delete M%1 file failed!" ).arg( nr, 2, 10, QChar( '0' ) ) );
                 }
                 else
                 {
@@ -8244,6 +8288,7 @@ void MainWindow::renameActiveClip( void )
 
     //Unload clip for Windows
     freeMlvObject( m_pMlvObject );
+    gpu_pipeline_init();
     m_pMlvObject = initMlvObject();
 
     //MLV
@@ -8891,12 +8936,12 @@ void MainWindow::exportHandler( void )
 
         if( !codecName.isEmpty() )
         {
-            codecName = QString( " – %1" ).arg( codecName );
+            codecName = QString( " Ã¢â‚¬â€œ %1" ).arg( codecName );
         }
 
         //Fill label in StatusDialog
         m_pStatusDialog->ui->label->setText(
-            tr( "Exporting – %1/%2 – %3%4" )
+            tr( "Exporting Ã¢â‚¬â€œ %1/%2 Ã¢â‚¬â€œ %3%4" )
                 .arg( jobNumber )
                 .arg( numberOfJobs )
                 .arg( QFileInfo( m_exportQueue.first()->fileName() ).fileName() )
@@ -9568,13 +9613,13 @@ void MainWindow::on_checkBoxVidstabTripod_toggled(bool checked)
 void MainWindow::on_toolButtonDeleteBpm_clicked()
 {
     if( !m_fileLoaded ) return;
-    if( QMessageBox::warning( this, tr( "%1 – Remove bad pixel map" ).arg( APPNAME ), tr( "Delete bad pixel map from disk?" ), tr( "Delete from Disk" ), tr( "Abort" ) ) )
+    if( QMessageBox::warning( this, tr( "%1 Ã¢â‚¬â€œ Remove bad pixel map" ).arg( APPNAME ), tr( "Delete bad pixel map from disk?" ), tr( "Delete from Disk" ), tr( "Abort" ) ) )
     {
         return;
     }
     if( BadPixelFileHandler::deleteCurrentMap( m_pMlvObject ) )
     {
-        QMessageBox::critical( this, tr( "%1 – Delete bad pixel map from disk" ).arg( APPNAME ), tr( "Delete bad pixel map failed!" ) );
+        QMessageBox::critical( this, tr( "%1 Ã¢â‚¬â€œ Delete bad pixel map from disk" ).arg( APPNAME ), tr( "Delete bad pixel map failed!" ) );
         return;
     }
     //Prepare crosses for bad pixel map
@@ -9750,7 +9795,7 @@ void MainWindow::gradientFinalPosPicked(int x, int y, bool isFinished)
     m_pGradientElement->gradientGraphicsElement()->show();
 
     //Set the UI numbers and sliders
-    ui->labelGradientAngle->setText( QString( "%1°" ).arg( m_pGradientElement->uiAngle(), 0, 'f', 1 ) );
+    ui->labelGradientAngle->setText( QString( "%1Ã‚Â°" ).arg( m_pGradientElement->uiAngle(), 0, 'f', 1 ) );
     ui->dialGradientAngle->blockSignals( true );
     ui->dialGradientAngle->setValue( m_pGradientElement->uiAngle() * 10.0 );
     ui->dialGradientAngle->blockSignals( false );
@@ -10230,7 +10275,7 @@ void MainWindow::on_labelGradientAngle_doubleClicked()
 //The gradient angle dial was turned
 void MainWindow::on_dialGradientAngle_valueChanged(int value)
 {
-    ui->labelGradientAngle->setText( QString( "%1°" ).arg( value / 10.0, 0, 'f', 1 ) );
+    ui->labelGradientAngle->setText( QString( "%1Ã‚Â°" ).arg( value / 10.0, 0, 'f', 1 ) );
 
     m_pGradientElement->gradientGraphicsElement()->blockSignals( true );
     m_pGradientElement->setUiAngle( value / 10.0 );
@@ -10674,7 +10719,7 @@ void MainWindow::on_toolButtonDarkFrameSubtractionFile_clicked()
     if( !QDir( path ).exists() ) path = QDir::homePath();
 
     //Open File Dialog
-    QString fileName = QFileDialog::getOpenFileName( this, tr("Open one or more MLV…"),
+    QString fileName = QFileDialog::getOpenFileName( this, tr("Open one or more MLVÃ¢â‚¬Â¦"),
                                                     path,
                                                     tr("Magic Lantern Video (*.mlv *.MLV)") );
 
@@ -10754,7 +10799,7 @@ void MainWindow::on_toolButtonLoadLut_clicked()
     if( !QDir( path ).exists() ) path = QDir::homePath();
 
     //Open File Dialog
-    QString fileName = QFileDialog::getOpenFileName( this, tr("Open cube LUT (*.cube)…"),
+    QString fileName = QFileDialog::getOpenFileName( this, tr("Open cube LUT (*.cube)Ã¢â‚¬Â¦"),
                                                     path,
                                                     tr("Cube LUT (*.cube *.CUBE)") );
 
@@ -10890,7 +10935,7 @@ void MainWindow::on_actionCreateAllMappFilesNow_triggered()
     setEnabled( false );
 
     m_pStatusDialog->setEnabled( true );
-    m_pStatusDialog->ui->label->setText( tr( "Creating MAPP files…" ) );
+    m_pStatusDialog->ui->label->setText( tr( "Creating MAPP filesÃ¢â‚¬Â¦" ) );
     m_pStatusDialog->ui->labelEstimatedTime->setText( "" );
     m_pStatusDialog->ui->progressBar->setValue( 0 );
     m_pStatusDialog->ui->totalProgressBar->hide();
@@ -11076,6 +11121,12 @@ void MainWindow::selectDebayerAlgorithm()
         case ReceiptSettings::DCB:
             setMlvUseDcbDebayer( m_pMlvObject );
             break;
+        case ReceiptSettings::GPU_FAST:
+            setMlvUseGpuFastDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA:
+            setMlvUseGpuCinemaDebayer( m_pMlvObject );
+            break;
         default:
             break;
         }
@@ -11108,6 +11159,12 @@ void MainWindow::selectDebayerAlgorithm()
             setMlvUseLmmseDebayer( m_pMlvObject );
             disableMlvCaching( m_pMlvObject );
             m_pChosenDebayer->setText( tr( "LMMSE" ) );
+        }
+        else if( ui->actionUseGpuLmmseDebayer->isChecked() )
+        {
+            setMlvUseGpuLmmseDebayer( m_pMlvObject );
+            disableMlvCaching( m_pMlvObject );
+            m_pChosenDebayer->setText( tr( "GPU (OpenCL)" ) );
         }
         else if( ui->actionUseIgvDebayer->isChecked() )
         {

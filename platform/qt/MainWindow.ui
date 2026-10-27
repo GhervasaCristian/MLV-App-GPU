@@ -200,6 +200,7 @@
      <addaction name="actionUseBilinear"/>
      <addaction name="actionUseLmmseDebayer"/>
      <addaction name="actionUseGpuLmmseDebayer"/>
+     <addaction name="actionUseGpuCinemaDebayer"/>
      <addaction name="actionUseIgvDebayer"/>
      <addaction name="actionAlwaysUseAMaZE"/>
      <addaction name="actionUseAhdDebayer"/>
@@ -2979,7 +2980,12 @@ QGroupBox::indicator:checked:disabled {
                    </item>
                     <item>
                      <property name="text">
-                      <string>GPU (OpenCL)</string>
+                      <string>GPU Fast (Multi-Gradient)</string>
+                     </property>
+                    </item>
+                    <item>
+                     <property name="text">
+                      <string>GPU Cinema (RCD)</string>
                      </property>
                     </item>
                   </widget>
@@ -10793,7 +10799,15 @@ QGroupBox::indicator:checked:disabled {
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>GPU (OpenCL)</string>
+    <string>GPU Fast (Multi-Gradient)</string>
+   </property>
+  </action>
+  <action name="actionUseGpuCinemaDebayer">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>GPU Cinema (RCD)</string>
    </property>
   </action>
   <action name="actionUseIgvDebayer">

@@ -1028,7 +1028,11 @@ int MainWindow::openMlv( QString fileName )
     }
     else if( ui->actionUseGpuLmmseDebayer->isChecked() )
     {
-        setMlvUseGpuLmmseDebayer( m_pMlvObject );
+        setMlvUseGpuFastDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseGpuCinemaDebayer->isChecked() )
+    {
+        setMlvUseGpuCinemaDebayer( m_pMlvObject );
     }
     else if( ui->actionUseIgvDebayer->isChecked() )
     {
@@ -1215,6 +1219,7 @@ void MainWindow::initGui( void )
     m_previewDebayerGroup->addAction( ui->actionUseRcdDebayer );
     m_previewDebayerGroup->addAction( ui->actionUseDcbDebayer );
     m_previewDebayerGroup->addAction( ui->actionUseGpuLmmseDebayer );
+    m_previewDebayerGroup->addAction( ui->actionUseGpuCinemaDebayer );
     m_previewDebayerGroup->addAction( ui->actionAlwaysUseAMaZE );
     m_previewDebayerGroup->addAction( ui->actionCaching );
     m_previewDebayerGroup->addAction( ui->actionDontSwitchDebayerForPlayback );
@@ -7716,6 +7721,12 @@ void MainWindow::on_actionUseGpuLmmseDebayer_triggered()
     return;
 }
 
+void MainWindow::on_actionUseGpuCinemaDebayer_triggered()
+{
+    selectDebayerAlgorithm();
+    return;
+}
+
 //Use IGV debayer
 void MainWindow::on_actionUseIgvDebayer_triggered()
 {
@@ -11162,9 +11173,15 @@ void MainWindow::selectDebayerAlgorithm()
         }
         else if( ui->actionUseGpuLmmseDebayer->isChecked() )
         {
-            setMlvUseGpuLmmseDebayer( m_pMlvObject );
+            setMlvUseGpuFastDebayer( m_pMlvObject );
             disableMlvCaching( m_pMlvObject );
-            m_pChosenDebayer->setText( tr( "GPU (OpenCL)" ) );
+            m_pChosenDebayer->setText( tr( "GPU Fast (Multi-Gradient)" ) );
+        }
+        else if( ui->actionUseGpuCinemaDebayer->isChecked() )
+        {
+            setMlvUseGpuCinemaDebayer( m_pMlvObject );
+            disableMlvCaching( m_pMlvObject );
+            m_pChosenDebayer->setText( tr( "GPU Cinema (RCD)" ) );
         }
         else if( ui->actionUseIgvDebayer->isChecked() )
         {

@@ -1101,14 +1101,8 @@ static int dng_get_frame(mlvObject_t * mlv_data, dngObject_t * dng_data, uint32_
                                            mlv_data->RAWI.yRes,
                                            mlv_data->RAWI.raw_info.bits_per_pixel);
 
-                /* apply low level raw processing (with GPU Dual ISO acceleration if available) */
-                int gpu_diso_done = 0;
-                if (llrpHQDualIso(mlv_data) && gpu_pipeline_is_available()) {
-                    gpu_diso_done = gpu_pipeline_dualiso_to_bayer(mlv_data, frame_index, (uint16_t*)dng_data->image_buf_unpacked);
-                }
-                if (!gpu_diso_done) {
-                    applyLLRawProcObject(mlv_data, dng_data->image_buf_unpacked, dng_data->image_size_unpacked);
-                }
+                /* apply low level raw processing to the unpacked_frame */
+                applyLLRawProcObject(mlv_data, dng_data->image_buf_unpacked, dng_data->image_size_unpacked);
 
                 if(dng_data->raw_output_state == COMPRESSED_RAW)
                 {
@@ -1166,14 +1160,8 @@ static int dng_get_frame(mlvObject_t * mlv_data, dngObject_t * dng_data, uint32_
                                       mlv_data->RAWI.yRes,
                                       mlv_data->RAWI.raw_info.bits_per_pixel);
 
-                /* apply low level raw processing (with GPU Dual ISO acceleration if available) */
-                int gpu_diso_done = 0;
-                if (llrpHQDualIso(mlv_data) && gpu_pipeline_is_available()) {
-                    gpu_diso_done = gpu_pipeline_dualiso_to_bayer(mlv_data, frame_index, (uint16_t*)dng_data->image_buf_unpacked);
-                }
-                if (!gpu_diso_done) {
-                    applyLLRawProcObject(mlv_data, dng_data->image_buf_unpacked, dng_data->image_size_unpacked);
-                }
+                /* apply low level raw processing to the unpacked_frame */
+                applyLLRawProcObject(mlv_data, dng_data->image_buf_unpacked, dng_data->image_size_unpacked);
 
                 if(dng_data->raw_output_state == COMPRESSED_RAW)
                 {

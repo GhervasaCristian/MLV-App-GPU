@@ -302,15 +302,6 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
 
-    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA)
-    {
-        int algo = (debayer_type == DEBAYER_GPU_CINEMA) ? GPU_ALGO_CINEMA : GPU_ALGO_FAST;
-        if (gpu_pipeline_process_frame(video, frame_index, output_frame, algo))
-        {
-            return;
-        }
-    }
-
     /* Get the raw data in B&W */
     getMlvRawFrameFloat(video, frame_index, temp_memory);
 
@@ -340,7 +331,29 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     }
 
     /* Debayer */
-    if (/*debayer_type == 1 ||*/ debayer_type == 4 || debayer_type == 5 || /*debayer_type == 6 ||*/ debayer_type == 7 || debayer_type == 8)
+    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA)
+    {
+        int algo = (debayer_type == DEBAYER_GPU_CINEMA) ? 11 : 10;
+        int black = getMlvBlackLevel(video);
+        int white = getMlvWhiteLevel(video);
+        uint16_t *bayer16 = (uint16_t *)malloc((size_t)width * height * sizeof(uint16_t));
+        if (bayer16) {
+            #pragma omp parallel for
+            for (int i = 0; i < width * height; i++) {
+                float v = temp_memory[i];
+                bayer16[i] = (v <= 0.0f) ? 0 : ((v >= 65535.0f) ? 65535 : (uint16_t)v);
+            }
+            int ok = debayerGpu(output_frame, bayer16, width, height, black, white, 0x02010100 /* RGGB */, algo);
+            free(bayer16);
+            if (!ok) {
+                /* GPU Fallback to CPU RCD */
+                debayerLibRtProcess(output_frame, temp_memory, width, height, 7, video->processing->cam_matrix);
+            }
+        } else {
+            debayerLibRtProcess(output_frame, temp_memory, width, height, 7, video->processing->cam_matrix);
+        }
+    }
+    else if (/*debayer_type == 1 ||*/ debayer_type == 4 || debayer_type == 5 || /*debayer_type == 6 ||*/ debayer_type == 7 || debayer_type == 8)
     {
         //AMaZE and AHD disabled from librtprocess because of bad artifacts
         debayerLibRtProcess(output_frame, temp_memory, width, height, debayer_type, video->processing->cam_matrix);

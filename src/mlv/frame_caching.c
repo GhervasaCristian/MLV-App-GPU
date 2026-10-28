@@ -315,6 +315,8 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
                 saved_diso_averaging = video->llrawproc->diso_averaging;
                 video->llrawproc->diso_averaging = 2; /* RCD Dual ISO: 4.5ms, identical sharpness */
             }
+            saved_chroma_smooth = video->llrawproc->chroma_smooth;
+            video->llrawproc->chroma_smooth = 0;
         }
     }
 

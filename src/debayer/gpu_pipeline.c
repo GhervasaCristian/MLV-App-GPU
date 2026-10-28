@@ -208,81 +208,27 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
     }
 
 apply_fixes:
-    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
     if (video->llrawproc) {
-        int saved_diso = video->llrawproc->dual_iso;
+        int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
+        int saved_averaging = video->llrawproc->diso_averaging;
+        int saved_chroma = video->llrawproc->chroma_smooth;
+
         if (is_dual_iso) {
-            video->llrawproc->dual_iso = 0; /* Bypass CPU dual ISO fusion during GPU playback! */
+            video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
+            video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 CPU blur during playback */
         }
+
         applyLLRawProcObject(video, raw_frame, raw_size);
-        video->llrawproc->dual_iso = saved_diso;
+
+        if (is_dual_iso) {
+            video->llrawproc->diso_averaging = saved_averaging;
+            video->llrawproc->chroma_smooth = saved_chroma;
+        }
     }
 
     return 1;
 }
 
-static void setup_dualiso_params(
-    mlvObject_t *video,
-    int black,
-    int white,
-    float *corr_ev,
-    float *overlap,
-    int *white_darkened,
-    int is_bright[4]
-) {
-    int diso1 = video->llrawproc->diso1;
-    int diso2 = video->llrawproc->diso2;
-    if (diso1 > 0 && diso2 > 0) {
-        *corr_ev = (float)fabs(log2((double)diso2 / (double)diso1));
-        *overlap = fmax(0.5f, 11.0f - *corr_ev);
-        *white_darkened = (int)((white - black) * pow(2.0, -(double)(*corr_ev)) + black);
-    }
-    const int iso_patterns[4][4] = {{1, 1, 0, 0}, {1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 1, 0}};
-    int pattern = video->llrawproc->diso_pattern;
-    if (pattern >= 1 && pattern <= 4) {
-        memcpy(is_bright, iso_patterns[pattern - 1], sizeof(int) * 4);
-    } else {
-        memcpy(is_bright, iso_patterns[1], sizeof(int) * 4);
-    }
-}
-
-static void setup_postprocess_params(mlvObject_t *video, gpu_postprocess_params_t *post) {
-    memset(post, 0, sizeof(gpu_postprocess_params_t));
-    post->rgb_to_Y[0] = 0.2126f;
-    post->rgb_to_Y[1] = 0.7152f;
-    post->rgb_to_Y[2] = 0.0722f;
-
-    if (video && video->processing) {
-        processingObject_t *p = video->processing;
-        double d0 = p->final_matrix[0];
-        double d4 = p->final_matrix[4];
-        double d8 = p->final_matrix[8];
-
-        if (p->use_cam_matrix > 0) {
-            post->matrix[0] = (float)(p->proper_wb_matrix[0] * d0);
-            post->matrix[1] = (float)(p->proper_wb_matrix[1] * d4);
-            post->matrix[2] = (float)(p->proper_wb_matrix[2] * d8);
-            post->matrix[3] = (float)(p->proper_wb_matrix[3] * d0);
-            post->matrix[4] = (float)(p->proper_wb_matrix[4] * d4);
-            post->matrix[5] = (float)(p->proper_wb_matrix[5] * d8);
-            post->matrix[6] = (float)(p->proper_wb_matrix[6] * d0);
-            post->matrix[7] = (float)(p->proper_wb_matrix[7] * d4);
-            post->matrix[8] = (float)(p->proper_wb_matrix[8] * d8);
-        } else {
-            post->matrix[0] = (float)d0;
-            post->matrix[4] = (float)d4;
-            post->matrix[8] = (float)d8;
-        }
-
-        post->sharpen_strength = (float)processingGetSharpening(p);
-        post->levels_lut = p->pre_calc_levels;
-        post->gamma_lut = p->pre_calc_gamma;
-    } else {
-        post->matrix[0] = 1.0f;
-        post->matrix[4] = 1.0f;
-        post->matrix[8] = 1.0f;
-    }
-}
 
 int gpu_pipeline_process_frame_8(
     mlvObject_t *video,
@@ -295,7 +241,9 @@ int gpu_pipeline_process_frame_8(
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
-    size_t raw_size = (size_t)width * height * sizeof(uint16_t);
+    size_t npix = (size_t)width * height;
+    size_t raw_size = npix * sizeof(uint16_t);
+    size_t rgb_size = npix * 3 * sizeof(uint16_t);
 
     static uint16_t *s_raw_cache = NULL;
     static size_t s_raw_alloc = 0;
@@ -305,6 +253,24 @@ int gpu_pipeline_process_frame_8(
         s_raw_alloc = s_raw_cache ? raw_size : 0;
     }
     if (!s_raw_cache) return 0;
+
+    static uint16_t *s_gpu_rgb16 = NULL;
+    static size_t s_gpu_rgb16_alloc = 0;
+    if (s_gpu_rgb16_alloc < rgb_size) {
+        free(s_gpu_rgb16);
+        s_gpu_rgb16 = (uint16_t*)malloc(rgb_size);
+        s_gpu_rgb16_alloc = s_gpu_rgb16 ? rgb_size : 0;
+    }
+    if (!s_gpu_rgb16) return 0;
+
+    static uint16_t *s_gpu_proc16 = NULL;
+    static size_t s_gpu_proc16_alloc = 0;
+    if (s_gpu_proc16_alloc < rgb_size) {
+        free(s_gpu_proc16);
+        s_gpu_proc16 = (uint16_t*)malloc(rgb_size);
+        s_gpu_proc16_alloc = s_gpu_proc16 ? rgb_size : 0;
+    }
+    if (!s_gpu_proc16) return 0;
 
     if (!load_raw_frame(video, frame_index, s_raw_cache, raw_size)) {
         return 0;
@@ -317,57 +283,53 @@ int gpu_pipeline_process_frame_8(
         }
     }
 
-    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-
     int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
     if (shift_val > 0) {
-        size_t npix = (size_t)width * height;
         #pragma omp parallel for
         for (size_t i = 0; i < npix; i++) {
             s_raw_cache[i] <<= shift_val;
         }
     }
 
-    int black = getMlvBlackLevel(video) << shift_val;
-    int white = getMlvWhiteLevel(video) << shift_val;
-    int white_darkened = white;
+    int black = (llrpHQDualIso(video)) ? video->processing->black_level : (getMlvBlackLevel(video) << shift_val);
+    int white = (llrpHQDualIso(video)) ? video->processing->white_level : (getMlvWhiteLevel(video) << shift_val);
     int cfa = video->RAWI.raw_info.cfa_pattern;
     if (!cfa) cfa = 0x02010100;
-
-    float corr_ev = 0.0f;
-    float overlap = 3.0f;
-    int is_bright[4] = { 0, 0, 1, 1 };
-
-    if (is_dual_iso) {
-        setup_dualiso_params(video, black, white, &corr_ev, &overlap, &white_darkened, is_bright);
-    }
 
     int algo = GPU_DEBAYER_FAST;
     if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
     else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
 
-    gpu_postprocess_params_t post;
-    setup_postprocess_params(video, &post);
-
-    int success = opencl_process_full_frame(
-        NULL,
-        output_rgb8,
+    int ok = opencl_debayer_process(
+        s_gpu_rgb16,
         s_raw_cache,
         width,
         height,
         black,
         white,
-        white_darkened,
         cfa,
-        is_dual_iso,
-        corr_ev,
-        overlap,
-        is_bright,
-        algo,
-        &post
+        algo
+    );
+    if (!ok) return 0;
+
+    applyProcessingObject(
+        video->processing,
+        width,
+        height,
+        s_gpu_rgb16,
+        s_gpu_proc16,
+        video->cpu_cores,
+        1,
+        frame_index
     );
 
-    return success;
+    size_t num_components = npix * 3;
+    #pragma omp parallel for
+    for (size_t i = 0; i < num_components; i++) {
+        output_rgb8[i] = (uint8_t)(s_gpu_proc16[i] >> 8);
+    }
+
+    return 1;
 }
 
 int gpu_pipeline_process_frame(
@@ -381,7 +343,8 @@ int gpu_pipeline_process_frame(
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
-    size_t raw_size = (size_t)width * height * sizeof(uint16_t);
+    size_t npix = (size_t)width * height;
+    size_t raw_size = npix * sizeof(uint16_t);
 
     static uint16_t *s_raw_cache_16 = NULL;
     static size_t s_raw_alloc_16 = 0;
@@ -403,19 +366,16 @@ int gpu_pipeline_process_frame(
         }
     }
 
-    /* Shift raw sensor data to full 16-bit range if not already 16-bit (e.g. non-HQ Dual ISO or normal clips) */
     int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
     if (shift_val > 0) {
-        size_t npix = (size_t)width * height;
         #pragma omp parallel for
         for (size_t i = 0; i < npix; i++) {
             s_raw_cache_16[i] <<= shift_val;
         }
     }
 
-
-    int black = getMlvBlackLevel(video) << shift_val;
-    int white = getMlvWhiteLevel(video) << shift_val;
+    int black = (llrpHQDualIso(video)) ? video->processing->black_level : (getMlvBlackLevel(video) << shift_val);
+    int white = (llrpHQDualIso(video)) ? video->processing->white_level : (getMlvWhiteLevel(video) << shift_val);
     int cfa = video->RAWI.raw_info.cfa_pattern;
     if (!cfa) cfa = 0x02010100;
 
@@ -435,6 +395,35 @@ int gpu_pipeline_process_frame(
     );
 
     return success;
+}
+
+static void setup_dualiso_params(
+    mlvObject_t *video,
+    int black,
+    int white,
+    float *corr_ev,
+    float *overlap,
+    int *white_darkened,
+    int is_bright[4]
+) {
+    if (!video || !video->llrawproc) return;
+    int diso1 = video->llrawproc->diso1;
+    int diso2 = video->llrawproc->diso2;
+    if (diso1 > 0 && diso2 > 0) {
+        *corr_ev = (float)fabs(log2((double)diso2 / (double)diso1));
+        *overlap = fmax(0.5f, 11.0f - *corr_ev);
+        *white_darkened = (int)((white - black) * pow(2.0, -(double)(*corr_ev)) + black);
+    }
+    int pattern = video->llrawproc->diso_pattern;
+    if (pattern == 1) {
+        is_bright[0] = 1; is_bright[1] = 0; is_bright[2] = 1; is_bright[3] = 0;
+    } else if (pattern == 2) {
+        is_bright[0] = 0; is_bright[1] = 0; is_bright[2] = 1; is_bright[3] = 1;
+    } else if (pattern == 3) {
+        is_bright[0] = 0; is_bright[1] = 1; is_bright[2] = 1; is_bright[3] = 0;
+    } else {
+        is_bright[0] = 0; is_bright[1] = 1; is_bright[2] = 0; is_bright[3] = 1;
+    }
 }
 
 int gpu_pipeline_dualiso_to_bayer(

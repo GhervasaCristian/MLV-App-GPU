@@ -25,6 +25,7 @@ static cl_kernel s_k_mg_rgb = NULL;
 static cl_program s_prog_rcd = NULL;
 static cl_kernel s_k_rcd_step1 = NULL;
 static cl_kernel s_k_rcd_step2 = NULL;
+static cl_kernel s_k_rcd_step3 = NULL;
 
 static cl_program s_prog_diso = NULL;
 static cl_kernel s_k_diso_interp = NULL;
@@ -35,6 +36,8 @@ static cl_mem s_buf_raw = NULL;
 static cl_mem s_buf_bayer_fused = NULL;
 static cl_mem s_buf_green = NULL;
 static cl_mem s_buf_vh_dir = NULL;
+static cl_mem s_buf_diff_r = NULL;
+static cl_mem s_buf_diff_b = NULL;
 static cl_mem s_buf_diso_dark = NULL;
 static cl_mem s_buf_diso_bright = NULL;
 static cl_mem s_buf_rgb = NULL;
@@ -51,6 +54,8 @@ static int ensure_buffers(int width, int height) {
     if (s_buf_bayer_fused) { cl_ReleaseMemObject(s_buf_bayer_fused); s_buf_bayer_fused = NULL; }
     if (s_buf_green) { cl_ReleaseMemObject(s_buf_green); s_buf_green = NULL; }
     if (s_buf_vh_dir) { cl_ReleaseMemObject(s_buf_vh_dir); s_buf_vh_dir = NULL; }
+    if (s_buf_diff_r) { cl_ReleaseMemObject(s_buf_diff_r); s_buf_diff_r = NULL; }
+    if (s_buf_diff_b) { cl_ReleaseMemObject(s_buf_diff_b); s_buf_diff_b = NULL; }
     if (s_buf_diso_dark) { cl_ReleaseMemObject(s_buf_diso_dark); s_buf_diso_dark = NULL; }
     if (s_buf_diso_bright) { cl_ReleaseMemObject(s_buf_diso_bright); s_buf_diso_bright = NULL; }
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
@@ -68,6 +73,12 @@ static int ensure_buffers(int width, int height) {
     if (err != CL_SUCCESS) return 0;
 
     s_buf_vh_dir = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
+    if (err != CL_SUCCESS) return 0;
+
+    s_buf_diff_r = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
+    if (err != CL_SUCCESS) return 0;
+
+    s_buf_diff_b = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
     if (err != CL_SUCCESS) return 0;
 
     s_buf_diso_dark = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(uint16_t), NULL, &err);
@@ -183,7 +194,8 @@ int opencl_debayer_init(void) {
     s_prog_rcd = build_program(s_ctx, selected_device, s_rcd_kernel_src);
     if (s_prog_rcd) {
         s_k_rcd_step1 = cl_CreateKernel(s_prog_rcd, "k_rcd_step1_green", &err);
-        s_k_rcd_step2 = cl_CreateKernel(s_prog_rcd, "k_rcd_step2_rgb", &err);
+        s_k_rcd_step2 = cl_CreateKernel(s_prog_rcd, "k_rcd_step2_chroma", &err);
+        s_k_rcd_step3 = cl_CreateKernel(s_prog_rcd, "k_rcd_step3_rgb", &err);
     }
 
     /* Build Dual ISO program */
@@ -193,7 +205,7 @@ int opencl_debayer_init(void) {
         s_k_diso_fusion = cl_CreateKernel(s_prog_diso, "k_dualiso_fusion", &err);
     }
 
-    if (!s_k_mg_green || !s_k_mg_rgb || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_diso_interp || !s_k_diso_fusion) {
+    if (!s_k_mg_green || !s_k_mg_rgb || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_diso_interp || !s_k_diso_fusion) {
         opencl_debayer_free();
         pthread_mutex_unlock(&s_ocl_mutex);
         return 0;
@@ -213,6 +225,8 @@ void opencl_debayer_free(void) {
     if (s_buf_bayer_fused) { cl_ReleaseMemObject(s_buf_bayer_fused); s_buf_bayer_fused = NULL; }
     if (s_buf_green) { cl_ReleaseMemObject(s_buf_green); s_buf_green = NULL; }
     if (s_buf_vh_dir) { cl_ReleaseMemObject(s_buf_vh_dir); s_buf_vh_dir = NULL; }
+    if (s_buf_diff_r) { cl_ReleaseMemObject(s_buf_diff_r); s_buf_diff_r = NULL; }
+    if (s_buf_diff_b) { cl_ReleaseMemObject(s_buf_diff_b); s_buf_diff_b = NULL; }
     if (s_buf_diso_dark) { cl_ReleaseMemObject(s_buf_diso_dark); s_buf_diso_dark = NULL; }
     if (s_buf_diso_bright) { cl_ReleaseMemObject(s_buf_diso_bright); s_buf_diso_bright = NULL; }
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
@@ -224,6 +238,7 @@ void opencl_debayer_free(void) {
 
     if (s_k_rcd_step1) { cl_ReleaseKernel(s_k_rcd_step1); s_k_rcd_step1 = NULL; }
     if (s_k_rcd_step2) { cl_ReleaseKernel(s_k_rcd_step2); s_k_rcd_step2 = NULL; }
+    if (s_k_rcd_step3) { cl_ReleaseKernel(s_k_rcd_step3); s_k_rcd_step3 = NULL; }
     if (s_prog_rcd) { cl_ReleaseProgram(s_prog_rcd); s_prog_rcd = NULL; }
 
     if (s_k_diso_interp) { cl_ReleaseKernel(s_k_diso_interp); s_k_diso_interp = NULL; }
@@ -257,28 +272,38 @@ static int execute_debayer(cl_mem bayer_buf, int width, int height, int cfa_patt
     size_t local_ws[2] = { 16, 16 };
     cl_int err = CL_SUCCESS;
 
-    if (algorithm == GPU_DEBAYER_CINEMA && s_k_rcd_step1 && s_k_rcd_step2) {
-        /* Pass 1: RCD Step 1 Green & Directional Discrimination */
+    if ((algorithm == GPU_DEBAYER_CINEMA || algorithm == 11) && s_k_rcd_step1 && s_k_rcd_step2 && s_k_rcd_step3) {
+        /* Pass 1: RCD Step 1 Green Reconstruction with 4th-power edge-locking */
         cl_SetKernelArg(s_k_rcd_step1, 0, sizeof(cl_mem), &bayer_buf);
         cl_SetKernelArg(s_k_rcd_step1, 1, sizeof(cl_mem), &s_buf_green);
-        cl_SetKernelArg(s_k_rcd_step1, 2, sizeof(cl_mem), &s_buf_vh_dir);
-        cl_SetKernelArg(s_k_rcd_step1, 3, sizeof(int), &width);
-        cl_SetKernelArg(s_k_rcd_step1, 4, sizeof(int), &height);
-        cl_SetKernelArg(s_k_rcd_step1, 5, sizeof(int), &cfa_pattern);
+        cl_SetKernelArg(s_k_rcd_step1, 2, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcd_step1, 3, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcd_step1, 4, sizeof(int), &cfa_pattern);
 
         err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step1, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
 
-        /* Pass 2: RCD Step 2 Ratio-Corrected Color Differences */
+        /* Pass 2: RCD Step 2 Directional Chromatic Difference Fields (Diff_R, Diff_B) */
         cl_SetKernelArg(s_k_rcd_step2, 0, sizeof(cl_mem), &bayer_buf);
         cl_SetKernelArg(s_k_rcd_step2, 1, sizeof(cl_mem), &s_buf_green);
-        cl_SetKernelArg(s_k_rcd_step2, 2, sizeof(cl_mem), &s_buf_vh_dir);
-        cl_SetKernelArg(s_k_rcd_step2, 3, sizeof(cl_mem), &s_buf_rgb);
+        cl_SetKernelArg(s_k_rcd_step2, 2, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcd_step2, 3, sizeof(cl_mem), &s_buf_diff_b);
         cl_SetKernelArg(s_k_rcd_step2, 4, sizeof(int), &width);
         cl_SetKernelArg(s_k_rcd_step2, 5, sizeof(int), &height);
         cl_SetKernelArg(s_k_rcd_step2, 6, sizeof(int), &cfa_pattern);
 
         err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step2, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 3: RCD Step 3 3x3 Sorting Network Median Filter & Full RGB Synthesis */
+        cl_SetKernelArg(s_k_rcd_step3, 0, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcd_step3, 1, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcd_step3, 2, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcd_step3, 3, sizeof(cl_mem), &s_buf_rgb);
+        cl_SetKernelArg(s_k_rcd_step3, 4, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcd_step3, 5, sizeof(int), &height);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step3, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
     } else {
         /* Pass 1: Multi-Gradient Green */
@@ -369,6 +394,8 @@ int opencl_debayer_process(
     int cfa_pattern,
     int algorithm
 ) {
+    (void)black;
+    (void)white;
     if (!opencl_debayer_is_available()) return 0;
 
     pthread_mutex_lock(&s_ocl_mutex);
@@ -451,6 +478,8 @@ int opencl_process_full_frame(
     const int is_bright[4],
     int algorithm
 ) {
+    (void)black;
+    (void)white;
     if (!opencl_debayer_is_available()) return 0;
 
     pthread_mutex_lock(&s_ocl_mutex);

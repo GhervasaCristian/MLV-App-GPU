@@ -343,7 +343,9 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
                 float v = temp_memory[i];
                 bayer16[i] = (v <= 0.0f) ? 0 : ((v >= 65535.0f) ? 65535 : (uint16_t)v);
             }
-            int ok = debayerGpu(output_frame, bayer16, width, height, black, white, 0x02010100 /* RGGB */, algo);
+            int cfa = video->RAWI.raw_info.cfa_pattern;
+            if (!cfa) cfa = 0x02010100;
+            int ok = debayerGpu(output_frame, bayer16, width, height, black, white, cfa, algo);
             free(bayer16);
             if (!ok) {
                 /* GPU Fallback to CPU RCD */

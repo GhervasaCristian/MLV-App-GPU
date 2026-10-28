@@ -14,11 +14,11 @@ enum {
 };
 
 typedef struct {
-    float matrix[9];             /* 3x3 color matrix */
-    float exposure_gain;         /* Linear exposure multiplier */
-    const uint16_t *tone_lut;    /* 65536-entry tone/gamma LUT (e.g. pre_calc_levels, or NULL) */
+    float matrix[9];             /* 3x3 combined color matrix */
+    const uint16_t *levels_lut;  /* 65536-entry pre_calc_levels LUT */
+    const uint16_t *gamma_lut;   /* 65536-entry pre_calc_gamma LUT */
     float sharpen_strength;      /* 0.0 to 1.0 (1.0 = 100% sharpness) */
-    int has_tone_lut;
+    float rgb_to_Y[3];           /* Gamut compression luma weights */
 } gpu_postprocess_params_t;
 
 int opencl_debayer_init(void);

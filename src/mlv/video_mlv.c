@@ -736,6 +736,18 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
 /* Get a processed frame in 8 bit */
 void getMlvProcessedFrame8(mlvObject_t * video, uint64_t frameIndex, uint8_t * outputFrame, int threads)
 {
+    if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
+    {
+        int algo = GPU_ALGO_FAST;
+        if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
+        else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
+
+        if (gpu_pipeline_process_frame_8(video, frameIndex, outputFrame, algo))
+        {
+            return;
+        }
+    }
+
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
     size_t rgb_frame_size = (size_t)width * height * 3;

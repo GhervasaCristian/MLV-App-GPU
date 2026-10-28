@@ -55,7 +55,8 @@ static cl_mem s_buf_diso_bright = NULL;
 static cl_mem s_buf_rgb = NULL;
 static cl_mem s_buf_rgb8 = NULL;
 static cl_mem s_buf_matrix = NULL;
-static cl_mem s_buf_tone_lut = NULL;
+static cl_mem s_buf_levels_lut = NULL;
+static cl_mem s_buf_gamma_lut = NULL;
 static cl_mem s_buf_rgb_processed = NULL;
 
 static int s_buf_width = 0;
@@ -78,7 +79,8 @@ static int ensure_buffers(int width, int height) {
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
     if (s_buf_rgb8) { cl_ReleaseMemObject(s_buf_rgb8); s_buf_rgb8 = NULL; }
     if (s_buf_matrix) { cl_ReleaseMemObject(s_buf_matrix); s_buf_matrix = NULL; }
-    if (s_buf_tone_lut) { cl_ReleaseMemObject(s_buf_tone_lut); s_buf_tone_lut = NULL; }
+    if (s_buf_levels_lut) { cl_ReleaseMemObject(s_buf_levels_lut); s_buf_levels_lut = NULL; }
+    if (s_buf_gamma_lut) { cl_ReleaseMemObject(s_buf_gamma_lut); s_buf_gamma_lut = NULL; }
     if (s_buf_rgb_processed) { cl_ReleaseMemObject(s_buf_rgb_processed); s_buf_rgb_processed = NULL; }
 
     cl_int err = CL_SUCCESS;
@@ -114,7 +116,9 @@ static int ensure_buffers(int width, int height) {
     s_buf_rgb = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * 3 * sizeof(uint16_t), NULL, &err);
     s_buf_rgb8 = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * 3 * sizeof(uint8_t), NULL, &err);
     s_buf_matrix = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, 9 * sizeof(float), NULL, &err);
-    s_buf_tone_lut = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, 65536 * sizeof(uint16_t), NULL, &err);
+    s_buf_levels_lut = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, 65536 * sizeof(uint16_t), NULL, &err);
+    if (err != CL_SUCCESS) return 0;
+    s_buf_gamma_lut = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, 65536 * sizeof(uint16_t), NULL, &err);
     s_buf_rgb_processed = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * 3 * sizeof(uint16_t), NULL, &err);
     if (err != CL_SUCCESS) return 0;
 
@@ -273,7 +277,8 @@ void opencl_debayer_free(void) {
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
     if (s_buf_rgb8) { cl_ReleaseMemObject(s_buf_rgb8); s_buf_rgb8 = NULL; }
     if (s_buf_matrix) { cl_ReleaseMemObject(s_buf_matrix); s_buf_matrix = NULL; }
-    if (s_buf_tone_lut) { cl_ReleaseMemObject(s_buf_tone_lut); s_buf_tone_lut = NULL; }
+    if (s_buf_levels_lut) { cl_ReleaseMemObject(s_buf_levels_lut); s_buf_levels_lut = NULL; }
+    if (s_buf_gamma_lut) { cl_ReleaseMemObject(s_buf_gamma_lut); s_buf_gamma_lut = NULL; }
     if (s_buf_rgb_processed) { cl_ReleaseMemObject(s_buf_rgb_processed); s_buf_rgb_processed = NULL; }
     s_buf_width = s_buf_height = 0;
 
@@ -562,14 +567,21 @@ static int execute_postprocess(
     err = cl_EnqueueWriteBuffer(s_queue, s_buf_matrix, CL_FALSE, 0, 9 * sizeof(float), params->matrix, 0, NULL, NULL);
     if (err != CL_SUCCESS) return 0;
 
-    int has_tone = (params->has_tone_lut && params->tone_lut != NULL);
-    if (has_tone) {
-        err = cl_EnqueueWriteBuffer(s_queue, s_buf_tone_lut, CL_FALSE, 0, 65536 * sizeof(uint16_t), params->tone_lut, 0, NULL, NULL);
+    if (params->levels_lut) {
+        err = cl_EnqueueWriteBuffer(s_queue, s_buf_levels_lut, CL_FALSE, 0, 65536 * sizeof(uint16_t), params->levels_lut, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+    }
+    if (params->gamma_lut) {
+        err = cl_EnqueueWriteBuffer(s_queue, s_buf_gamma_lut, CL_FALSE, 0, 65536 * sizeof(uint16_t), params->gamma_lut, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
     }
 
     cl_mem out8 = output_8bit ? s_buf_rgb8 : NULL;
     cl_mem out16 = output_8bit ? NULL : s_buf_rgb_processed;
+
+    float y_r = params->rgb_to_Y[0];
+    float y_g = params->rgb_to_Y[1];
+    float y_b = params->rgb_to_Y[2];
 
     cl_SetKernelArg(s_k_postprocess, 0, sizeof(cl_mem), &s_buf_rgb);
     cl_SetKernelArg(s_k_postprocess, 1, sizeof(cl_mem), &out8);
@@ -577,10 +589,12 @@ static int execute_postprocess(
     cl_SetKernelArg(s_k_postprocess, 3, sizeof(int), &width);
     cl_SetKernelArg(s_k_postprocess, 4, sizeof(int), &height);
     cl_SetKernelArg(s_k_postprocess, 5, sizeof(cl_mem), &s_buf_matrix);
-    cl_SetKernelArg(s_k_postprocess, 6, sizeof(float), &params->exposure_gain);
-    cl_SetKernelArg(s_k_postprocess, 7, sizeof(cl_mem), has_tone ? &s_buf_tone_lut : &s_buf_matrix);
+    cl_SetKernelArg(s_k_postprocess, 6, sizeof(cl_mem), &s_buf_levels_lut);
+    cl_SetKernelArg(s_k_postprocess, 7, sizeof(cl_mem), &s_buf_gamma_lut);
     cl_SetKernelArg(s_k_postprocess, 8, sizeof(float), &params->sharpen_strength);
-    cl_SetKernelArg(s_k_postprocess, 9, sizeof(int), &has_tone);
+    cl_SetKernelArg(s_k_postprocess, 9, sizeof(float), &y_r);
+    cl_SetKernelArg(s_k_postprocess, 10, sizeof(float), &y_g);
+    cl_SetKernelArg(s_k_postprocess, 11, sizeof(float), &y_b);
 
     size_t global_ws[2] = { ((size_t)width + 15) / 16 * 16, ((size_t)height + 15) / 16 * 16 };
     size_t local_ws[2]  = { 16, 16 };

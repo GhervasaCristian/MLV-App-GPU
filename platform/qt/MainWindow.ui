@@ -201,6 +201,7 @@
      <addaction name="actionUseLmmseDebayer"/>
      <addaction name="actionUseGpuLmmseDebayer"/>
      <addaction name="actionUseGpuCinemaDebayer"/>
+     <addaction name="actionUseGpuCinemaV2Debayer"/>
      <addaction name="actionUseIgvDebayer"/>
      <addaction name="actionAlwaysUseAMaZE"/>
      <addaction name="actionUseAhdDebayer"/>
@@ -2986,6 +2987,11 @@ QGroupBox::indicator:checked:disabled {
                     <item>
                      <property name="text">
                       <string>GPU Cinema (RCD)</string>
+                     </property>
+                    </item>
+                    <item>
+                     <property name="text">
+                      <string>GPU Cinema (RCDv2)</string>
                      </property>
                     </item>
                   </widget>
@@ -10808,6 +10814,14 @@ QGroupBox::indicator:checked:disabled {
    </property>
    <property name="text">
     <string>GPU Cinema (RCD)</string>
+   </property>
+  </action>
+  <action name="actionUseGpuCinemaV2Debayer">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>GPU Cinema (RCDv2)</string>
    </property>
   </action>
   <action name="actionUseIgvDebayer">

@@ -53,11 +53,13 @@ demosaic(amazeinfo_t * inputdata);
 #define DEBAYER_GPU 10
 #define DEBAYER_GPU_FAST 10
 #define DEBAYER_GPU_CINEMA 11
+#define DEBAYER_GPU_CINEMA_V2 12
 #define DEBAYER_GPU_LMMSE 10 /* Alias for compatibility */
 
 int debayerGpu(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern, int algorithm);
 int debayerGpuMultiGradient(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern);
 int debayerGpuRcd(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern);
+int debayerGpuRcdV2(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern);
 
 #ifdef __cplusplus
 }

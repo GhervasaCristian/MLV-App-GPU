@@ -8,8 +8,9 @@ extern "C" {
 #endif
 
 enum {
-    GPU_DEBAYER_FAST = 0,    /* Multi-Gradient (Hamilton-Adams) - ultra fast */
-    GPU_DEBAYER_CINEMA = 1   /* RCD (Ratio Corrected Demosaicing) - cinema grade */
+    GPU_DEBAYER_FAST = 0,       /* Fast Single Pass - ultra fast playback */
+    GPU_DEBAYER_CINEMA = 1,     /* RCD v1 (3-pass with median) */
+    GPU_DEBAYER_CINEMA_V2 = 2   /* RCD v2 (RawTherapee v2.3 ratio-corrected, zero red fringe) */
 };
 
 int opencl_debayer_init(void);

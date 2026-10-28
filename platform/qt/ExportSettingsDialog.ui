@@ -331,6 +331,11 @@
            </item>
           <item>
            <property name="text">
+            <string>Force GPU Cinema (RCDv2)</string>
+            </property>
+           </item>
+          <item>
+           <property name="text">
             <string>Receipt configuration</string>
            </property>
           </item>

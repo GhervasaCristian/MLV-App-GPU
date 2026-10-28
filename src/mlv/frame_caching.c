@@ -302,8 +302,22 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
 
+    int saved_diso_averaging = -1;
+    int saved_chroma_smooth = -1;
+    if (debayer_type == DEBAYER_GPU_FAST && video->llrawproc) {
+        saved_diso_averaging = video->llrawproc->diso_averaging;
+        saved_chroma_smooth = video->llrawproc->chroma_smooth;
+        video->llrawproc->diso_averaging = 1; /* mean23: ultra-fast for GPU FAST playback */
+        video->llrawproc->chroma_smooth = 0;
+    }
+
     /* Get the raw data in B&W */
     getMlvRawFrameFloat(video, frame_index, temp_memory);
+
+    if (saved_diso_averaging >= 0) {
+        video->llrawproc->diso_averaging = saved_diso_averaging;
+        video->llrawproc->chroma_smooth = saved_chroma_smooth;
+    }
 
     wb_convert_info_t wb_info;
 
@@ -331,9 +345,11 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     }
 
     /* Debayer */
-    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA)
+    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2)
     {
-        int algo = (debayer_type == DEBAYER_GPU_CINEMA) ? 11 : 10;
+        int algo = 10;
+        if (debayer_type == DEBAYER_GPU_CINEMA) algo = 11;
+        else if (debayer_type == DEBAYER_GPU_CINEMA_V2) algo = 12;
         int black = getMlvBlackLevel(video);
         int white = getMlvWhiteLevel(video);
         uint16_t *bayer16 = (uint16_t *)malloc((size_t)width * height * sizeof(uint16_t));

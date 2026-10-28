@@ -2,6 +2,7 @@
 #include "opencl_debayer.h"
 #include "../mlv/video_mlv.h"
 #include "../processing/raw_processing.h"
+#include "../mlv/llrawproc/llrawproc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -207,15 +208,8 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
     }
 
 apply_fixes:
-    /* Apply sensor pre-fixes (bad pixels, focus pixels) without dual ISO CPU fusion */
-    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
     if (video->llrawproc) {
-        int saved_diso = video->llrawproc->dual_iso;
-        if (is_dual_iso) {
-            video->llrawproc->dual_iso = 0; /* Bypass CPU dual ISO fusion */
-        }
         applyLLRawProcObject(video, raw_frame, raw_size);
-        video->llrawproc->dual_iso = saved_diso;
     }
 
     return 1;
@@ -249,26 +243,6 @@ static void setup_dualiso_params(
     }
 }
 
-static void setup_postprocess_params(mlvObject_t *video, gpu_postprocess_params_t *post) {
-    memset(post, 0, sizeof(gpu_postprocess_params_t));
-    post->exposure_gain = 1.0f;
-
-    if (video && video->processing) {
-        for (int i = 0; i < 9; i++) {
-            post->matrix[i] = (float)video->processing->final_matrix[i];
-        }
-        if (video->processing->exposure_stops >= 0.0) {
-            post->exposure_gain = (float)pow(2.0, video->processing->exposure_stops);
-        }
-        post->sharpen_strength = (float)processingGetSharpening(video->processing);
-        post->tone_lut = video->processing->pre_calc_levels;
-        post->has_tone_lut = 1;
-    } else {
-        post->matrix[0] = 1.0f;
-        post->matrix[4] = 1.0f;
-        post->matrix[8] = 1.0f;
-    }
-}
 
 int gpu_pipeline_process_frame_8(
     mlvObject_t *video,
@@ -277,74 +251,34 @@ int gpu_pipeline_process_frame_8(
     int gpu_algorithm
 ) {
     if (!video || !output_rgb8) return 0;
-    if (!gpu_pipeline_is_available()) return 0;
-
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
-    size_t raw_size = (size_t)width * height * sizeof(uint16_t);
+    size_t rgb_size = (size_t)width * height * 3 * sizeof(uint16_t);
 
-    static uint16_t *s_raw_cache = NULL;
-    static size_t s_raw_alloc = 0;
-    if (s_raw_alloc < raw_size) {
-        free(s_raw_cache);
-        s_raw_cache = (uint16_t*)malloc(raw_size);
-        s_raw_alloc = s_raw_cache ? raw_size : 0;
+    static uint16_t *s_tmp_debayer = NULL;
+    static uint16_t *s_tmp_proc = NULL;
+    static size_t s_tmp_alloc = 0;
+    if (s_tmp_alloc < rgb_size) {
+        free(s_tmp_debayer);
+        free(s_tmp_proc);
+        s_tmp_debayer = (uint16_t*)malloc(rgb_size);
+        s_tmp_proc = (uint16_t*)malloc(rgb_size);
+        s_tmp_alloc = (s_tmp_debayer && s_tmp_proc) ? rgb_size : 0;
     }
-    if (!s_raw_cache) return 0;
+    if (!s_tmp_debayer || !s_tmp_proc) return 0;
 
-    if (!load_raw_frame(video, frame_index, s_raw_cache, raw_size)) {
+    if (!gpu_pipeline_process_frame(video, frame_index, s_tmp_debayer, gpu_algorithm)) {
         return 0;
     }
 
-    /* Immediately queue prefetch for upcoming frames */
-    for (int f = 1; f <= NUM_PREFETCH_SLOTS; f++) {
-        uint64_t ahead = frame_index + f;
-        if (ahead < getMlvFrames(video)) {
-            trigger_prefetch_slot(video, ahead, frame_index);
-        }
+    applyProcessingObject(video->processing, width, height, s_tmp_debayer, s_tmp_proc, 12, 1, frame_index);
+
+    size_t np = (size_t)width * height * 3;
+    #pragma omp parallel for
+    for (size_t i = 0; i < np; i++) {
+        output_rgb8[i] = (uint8_t)(s_tmp_proc[i] >> 8);
     }
-
-    int black = getMlvBlackLevel(video);
-    int white = getMlvWhiteLevel(video);
-    int white_darkened = white;
-    int cfa = video->RAWI.raw_info.cfa_pattern;
-    if (!cfa) cfa = 0x02010100;
-
-    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-    float corr_ev = 0.0f;
-    float overlap = 3.0f;
-    int is_bright[4] = { 0, 1, 0, 1 };
-
-    if (is_dual_iso) {
-        setup_dualiso_params(video, black, white, &corr_ev, &overlap, &white_darkened, is_bright);
-    }
-
-    int algo = GPU_DEBAYER_FAST;
-    if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
-    else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
-
-    gpu_postprocess_params_t post;
-    setup_postprocess_params(video, &post);
-
-    int success = opencl_process_full_frame(
-        NULL,
-        output_rgb8,
-        s_raw_cache,
-        width,
-        height,
-        black,
-        white,
-        white_darkened,
-        cfa,
-        is_dual_iso,
-        corr_ev,
-        overlap,
-        is_bright,
-        algo,
-        &post
-    );
-
-    return success;
+    return 1;
 }
 
 int gpu_pipeline_process_frame(
@@ -380,41 +314,35 @@ int gpu_pipeline_process_frame(
         }
     }
 
-    int black = getMlvBlackLevel(video);
-    int white = getMlvWhiteLevel(video);
-    int white_darkened = white;
+    /* Shift raw sensor data to full 16-bit range if not already 16-bit (e.g. non-HQ Dual ISO or normal clips) */
+    int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
+    if (shift_val > 0) {
+        size_t npix = (size_t)width * height;
+        #pragma omp parallel for
+        for (size_t i = 0; i < npix; i++) {
+            s_raw_cache_16[i] <<= shift_val;
+        }
+    }
+
+
+    int black = getMlvBlackLevel(video) << shift_val;
+    int white = getMlvWhiteLevel(video) << shift_val;
     int cfa = video->RAWI.raw_info.cfa_pattern;
     if (!cfa) cfa = 0x02010100;
-
-    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-    float corr_ev = 0.0f;
-    float overlap = 3.0f;
-    int is_bright[4] = { 0, 1, 0, 1 };
-
-    if (is_dual_iso) {
-        setup_dualiso_params(video, black, white, &corr_ev, &overlap, &white_darkened, is_bright);
-    }
 
     int algo = GPU_DEBAYER_FAST;
     if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
     else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
 
-    int success = opencl_process_full_frame(
+    int success = opencl_debayer_process(
         output_rgb16,
-        NULL,
         s_raw_cache_16,
         width,
         height,
         black,
         white,
-        white_darkened,
         cfa,
-        is_dual_iso,
-        corr_ev,
-        overlap,
-        is_bright,
-        algo,
-        NULL
+        algo
     );
 
     return success;

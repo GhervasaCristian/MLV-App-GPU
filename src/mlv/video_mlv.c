@@ -686,27 +686,39 @@ void getMlvRawFrameDebayered(mlvObject_t * video, uint64_t frameIndex, uint16_t 
  * it may have minor artifacts (though I haven't found them yet) */
 void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t * outputFrame, int threads)
 {
+    int width = getMlvWidth(video);
+    int height = getMlvHeight(video);
+    size_t rgb_frame_size = (size_t)height * width * 3;
+
     if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
     {
         int algo = GPU_ALGO_FAST;
         if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
         else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
 
-        if (gpu_pipeline_process_frame(video, frameIndex, outputFrame, algo))
+        static uint16_t *s_gpu_debayer_buf = NULL;
+        static size_t s_gpu_debayer_alloc = 0;
+        size_t needed = rgb_frame_size * sizeof(uint16_t);
+        if (s_gpu_debayer_alloc < needed) {
+            free(s_gpu_debayer_buf);
+            s_gpu_debayer_buf = (uint16_t*)malloc(needed);
+            s_gpu_debayer_alloc = s_gpu_debayer_buf ? needed : 0;
+        }
+
+        if (s_gpu_debayer_buf && gpu_pipeline_process_frame(video, frameIndex, s_gpu_debayer_buf, algo))
         {
+            applyProcessingObject( video->processing,
+                                   width, height,
+                                   s_gpu_debayer_buf,
+                                   outputFrame,
+                                   threads, 1, frameIndex );
             return;
         }
     }
 
-    /* Useful */
-    int width = getMlvWidth(video);
-    int height = getMlvHeight(video);
-
-    /* Size of RAW frame */
-    int rgb_frame_size = height * width * 3;
-
-    /* Unprocessed debayered frame (RGB) */
+    /* Fallback to CPU pipeline */
     uint16_t * unprocessed_frame = malloc( rgb_frame_size * sizeof(uint16_t) );
+    if (!unprocessed_frame) return;
 
     /* Get the raw data in B&W */
     getMlvRawFrameDebayered(video, frameIndex, unprocessed_frame);
@@ -724,34 +736,36 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
 /* Get a processed frame in 8 bit */
 void getMlvProcessedFrame8(mlvObject_t * video, uint64_t frameIndex, uint8_t * outputFrame, int threads)
 {
-    if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
-    {
-        int algo = GPU_ALGO_FAST;
-        if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
-        else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
+    int width = getMlvWidth(video);
+    int height = getMlvHeight(video);
+    size_t rgb_frame_size = (size_t)width * height * 3;
 
-        if (gpu_pipeline_process_frame_8(video, frameIndex, outputFrame, algo))
-        {
-            return;
-        }
+    static uint16_t *s_gpu_proc_buf = NULL;
+    static size_t s_gpu_proc_alloc = 0;
+    size_t needed = rgb_frame_size * sizeof(uint16_t);
+    if (s_gpu_proc_alloc < needed) {
+        free(s_gpu_proc_buf);
+        s_gpu_proc_buf = (uint16_t*)malloc(needed);
+        s_gpu_proc_alloc = s_gpu_proc_buf ? needed : 0;
     }
 
-    /* Size of RAW frame */
-    int rgb_frame_size = getMlvWidth(video) * getMlvHeight(video) * 3;
+    uint16_t *proc_buf = s_gpu_proc_buf;
+    int needs_free = 0;
+    if (!proc_buf) {
+        proc_buf = (uint16_t*)malloc(needed);
+        needs_free = 1;
+    }
+    if (!proc_buf) return;
 
-    /* Processed frame (RGB) */
-    uint16_t * processed_frame = malloc( rgb_frame_size * sizeof(uint16_t) );
+    getMlvProcessedFrame16(video, frameIndex, proc_buf, threads);
 
-    getMlvProcessedFrame16(video, frameIndex, processed_frame, threads);
-
-    /* Copy (and 8-bitize) */
     #pragma omp parallel for
-    for (int i = 0; i < rgb_frame_size; ++i)
+    for (size_t i = 0; i < rgb_frame_size; ++i)
     {
-        outputFrame[i] = processed_frame[i] >> 8;
+        outputFrame[i] = (uint8_t)(proc_buf[i] >> 8);
     }
 
-    free(processed_frame);
+    if (needs_free) free(proc_buf);
 }
 
 /* To initialise mlv object with a clip

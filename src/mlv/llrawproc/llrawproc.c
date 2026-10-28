@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (C) 2017 Bouncyball
  *
  * This program is free software; you can redistribute it and/or
@@ -361,6 +361,10 @@ void applyLLRawProcObject(mlvObject_t * video, uint16_t * raw_image_buff, size_t
                                video->llrawproc->diso_frblending,
                                video->llrawproc->chroma_smooth,
                                video->cpu_cores);
+            if (video->llrawproc->diso_pattern < 0)
+            {
+                video->llrawproc->diso_pattern = -video->llrawproc->diso_pattern;
+            }
 
             /* for full20bit set diso levels and bit depth to 16 bit, needed for cDNG export */
             int bits_shift = 16 - raw_info.bits_per_pixel;

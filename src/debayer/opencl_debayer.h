@@ -13,6 +13,14 @@ enum {
     GPU_DEBAYER_CINEMA_V2 = 2   /* RCD v2 (RawTherapee v2.3 ratio-corrected, zero red fringe) */
 };
 
+typedef struct {
+    float matrix[9];             /* 3x3 color matrix */
+    float exposure_gain;         /* Linear exposure multiplier */
+    const uint16_t *tone_lut;    /* 65536-entry tone/gamma LUT (e.g. pre_calc_levels, or NULL) */
+    float sharpen_strength;      /* 0.0 to 1.0 (1.0 = 100% sharpness) */
+    int has_tone_lut;
+} gpu_postprocess_params_t;
+
 int opencl_debayer_init(void);
 void opencl_debayer_free(void);
 int opencl_debayer_is_available(void);
@@ -44,7 +52,7 @@ int opencl_dualiso_process(
     const int is_bright[4]
 );
 
-/* Full Unified GPU Pipeline (Dual ISO Fusion + Debayering) */
+/* Full Unified GPU Pipeline (Dual ISO Fusion + Debayering + Post-Processing) */
 int opencl_process_full_frame(
     uint16_t *rgb_out_16,
     uint8_t *rgb_out_8,
@@ -59,7 +67,8 @@ int opencl_process_full_frame(
     float corr_ev,
     float overlap,
     const int is_bright[4],
-    int algorithm
+    int algorithm,
+    const gpu_postprocess_params_t *post_params
 );
 
 #ifdef __cplusplus

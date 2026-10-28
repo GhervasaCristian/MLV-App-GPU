@@ -9115,6 +9115,11 @@ void MainWindow::on_actionPlay_toggled(bool checked)
     if( !checked ) m_playbackStopped = true;
 
     selectDebayerAlgorithm();
+
+    if( checked && m_fileLoaded && m_pMlvObject )
+    {
+        gpu_pipeline_trigger_prefetch( m_pMlvObject, ui->horizontalSliderPosition->value() + 1 );
+    }
 }
 
 //Zebras en-/disabled -> redraw

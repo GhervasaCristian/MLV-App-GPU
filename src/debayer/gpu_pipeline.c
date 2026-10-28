@@ -1,16 +1,166 @@
 #include "gpu_pipeline.h"
 #include "opencl_debayer.h"
 #include "../mlv/video_mlv.h"
+#include "../processing/raw_processing.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
+
+#define NUM_PREFETCH_SLOTS 8
+
+typedef struct {
+    uint16_t *buffer;
+    size_t alloc_bytes;
+    uint64_t frame_index;
+    mlvObject_t *video;
+    volatile int state; /* 0: empty, 1: loading, 2: ready */
+    pthread_t thread;
+} prefetch_slot_t;
+
+static prefetch_slot_t s_slots[NUM_PREFETCH_SLOTS];
+static pthread_mutex_t s_prefetch_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  s_prefetch_cond  = PTHREAD_COND_INITIALIZER;
+
+typedef struct {
+    int slot_id;
+    mlvObject_t *video;
+    uint64_t frame_index;
+} worker_arg_t;
+
+static void* prefetch_slot_worker(void* arg) {
+    worker_arg_t *w = (worker_arg_t*)arg;
+    int slot = w->slot_id;
+    mlvObject_t *video = w->video;
+    uint64_t frame_index = w->frame_index;
+    free(w);
+
+    pthread_mutex_lock(&s_prefetch_mutex);
+    uint16_t *dest = s_slots[slot].buffer;
+    pthread_mutex_unlock(&s_prefetch_mutex);
+
+    int ok = 0;
+    if (video && dest) {
+        ok = (getMlvRawFrameUint16(video, frame_index, dest) == 0);
+    }
+
+    pthread_mutex_lock(&s_prefetch_mutex);
+    if (s_slots[slot].video == video && s_slots[slot].frame_index == frame_index) {
+        s_slots[slot].state = ok ? 2 : 0;
+    }
+    pthread_cond_broadcast(&s_prefetch_cond);
+    pthread_mutex_unlock(&s_prefetch_mutex);
+
+    return NULL;
+}
+
+static void evict_stale_slots_locked(mlvObject_t *video, uint64_t current_frame) {
+    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
+        if (s_slots[i].state == 2) {
+            /* Ready slot: if from different video or in the past, evict immediately */
+            if (s_slots[i].video != video || s_slots[i].frame_index < current_frame) {
+                s_slots[i].state = 0;
+            }
+        }
+    }
+}
+
+static void trigger_prefetch_slot(mlvObject_t *video, uint64_t frame_index, uint64_t current_frame) {
+    if (!video || frame_index >= getMlvFrames(video)) return;
+
+    pthread_mutex_lock(&s_prefetch_mutex);
+
+    evict_stale_slots_locked(video, current_frame);
+
+    /* Check if already in slots */
+    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
+        if (s_slots[i].video == video && s_slots[i].frame_index == frame_index && s_slots[i].state != 0) {
+            pthread_mutex_unlock(&s_prefetch_mutex);
+            return;
+        }
+    }
+
+    /* Find an empty slot */
+    int target_slot = -1;
+    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
+        if (s_slots[i].state == 0) {
+            target_slot = i;
+            break;
+        }
+    }
+
+    /* If no empty slot, check for slots that are too far ahead (e.g. > current_frame + NUM_PREFETCH_SLOTS) */
+    if (target_slot < 0) {
+        for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
+            if (s_slots[i].state == 2 && s_slots[i].frame_index > current_frame + NUM_PREFETCH_SLOTS) {
+                s_slots[i].state = 0;
+                target_slot = i;
+                break;
+            }
+        }
+    }
+
+    if (target_slot < 0) {
+        pthread_mutex_unlock(&s_prefetch_mutex);
+        return;
+    }
+
+    int width = getMlvWidth(video);
+    int height = getMlvHeight(video);
+    size_t needed = (size_t)width * height * sizeof(uint16_t);
+
+    if (s_slots[target_slot].alloc_bytes < needed) {
+        free(s_slots[target_slot].buffer);
+        s_slots[target_slot].buffer = (uint16_t*)malloc(needed);
+        s_slots[target_slot].alloc_bytes = s_slots[target_slot].buffer ? needed : 0;
+    }
+
+    if (!s_slots[target_slot].buffer) {
+        pthread_mutex_unlock(&s_prefetch_mutex);
+        return;
+    }
+
+    s_slots[target_slot].video = video;
+    s_slots[target_slot].frame_index = frame_index;
+    s_slots[target_slot].state = 1; /* loading */
+
+    worker_arg_t *w = (worker_arg_t*)malloc(sizeof(worker_arg_t));
+    w->slot_id = target_slot;
+    w->video = video;
+    w->frame_index = frame_index;
+
+    pthread_create(&s_slots[target_slot].thread, NULL, prefetch_slot_worker, w);
+    pthread_detach(s_slots[target_slot].thread);
+
+    pthread_mutex_unlock(&s_prefetch_mutex);
+}
+
+void gpu_pipeline_trigger_prefetch(mlvObject_t *video, uint64_t next_frame_index) {
+    for (int f = 0; f < NUM_PREFETCH_SLOTS; f++) {
+        uint64_t ahead = next_frame_index + f;
+        if (video && ahead < getMlvFrames(video)) {
+            trigger_prefetch_slot(video, ahead, next_frame_index);
+        }
+    }
+}
 
 int gpu_pipeline_init(void) {
     return opencl_debayer_init();
 }
 
 void gpu_pipeline_free(void) {
+    pthread_mutex_lock(&s_prefetch_mutex);
+    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
+        if (s_slots[i].buffer) {
+            free(s_slots[i].buffer);
+            s_slots[i].buffer = NULL;
+            s_slots[i].alloc_bytes = 0;
+        }
+        s_slots[i].state = 0;
+    }
+    pthread_mutex_unlock(&s_prefetch_mutex);
+
     opencl_debayer_free();
 }
 
@@ -20,6 +170,181 @@ int gpu_pipeline_is_available(void) {
 
 const char* gpu_pipeline_device_name(void) {
     return opencl_debayer_get_device_name();
+}
+
+/* Internal helper: loads frame using prefetch cache when available */
+static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *raw_frame, size_t raw_size) {
+    int found_slot = -1;
+
+    pthread_mutex_lock(&s_prefetch_mutex);
+    evict_stale_slots_locked(video, frame_index);
+
+    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
+        if (s_slots[i].video == video && s_slots[i].frame_index == frame_index) {
+            found_slot = i;
+            break;
+        }
+    }
+
+    if (found_slot >= 0) {
+        while (s_slots[found_slot].state == 1) {
+            pthread_cond_wait(&s_prefetch_cond, &s_prefetch_mutex);
+        }
+
+        if (s_slots[found_slot].state == 2 && s_slots[found_slot].buffer) {
+            memcpy(raw_frame, s_slots[found_slot].buffer, raw_size);
+            s_slots[found_slot].state = 0; /* Consumed */
+            evict_stale_slots_locked(video, frame_index + 1);
+            pthread_mutex_unlock(&s_prefetch_mutex);
+            goto apply_fixes;
+        }
+    }
+    pthread_mutex_unlock(&s_prefetch_mutex);
+
+    /* Cache miss: load synchronously */
+    if (getMlvRawFrameUint16(video, frame_index, raw_frame) != 0) {
+        return 0;
+    }
+
+apply_fixes:
+    /* Apply sensor pre-fixes (bad pixels, focus pixels) without dual ISO CPU fusion */
+    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
+    if (video->llrawproc) {
+        int saved_diso = video->llrawproc->dual_iso;
+        if (is_dual_iso) {
+            video->llrawproc->dual_iso = 0; /* Bypass CPU dual ISO fusion */
+        }
+        applyLLRawProcObject(video, raw_frame, raw_size);
+        video->llrawproc->dual_iso = saved_diso;
+    }
+
+    return 1;
+}
+
+static void setup_dualiso_params(
+    mlvObject_t *video,
+    int black,
+    int white,
+    float *corr_ev,
+    float *overlap,
+    int *white_darkened,
+    int is_bright[4]
+) {
+    int diso1 = video->llrawproc->diso1;
+    int diso2 = video->llrawproc->diso2;
+    if (diso1 > 0 && diso2 > 0) {
+        *corr_ev = (float)fabs(log2((double)diso2 / (double)diso1));
+        *overlap = fmax(0.5f, 11.0f - *corr_ev);
+        *white_darkened = (int)((white - black) * pow(2.0, -(double)(*corr_ev)) + black);
+    }
+    int pattern = video->llrawproc->diso_pattern;
+    if (pattern == 1) {
+        is_bright[0] = 1; is_bright[1] = 0; is_bright[2] = 1; is_bright[3] = 0;
+    } else if (pattern == 2) {
+        is_bright[0] = 0; is_bright[1] = 0; is_bright[2] = 1; is_bright[3] = 1;
+    } else if (pattern == 3) {
+        is_bright[0] = 0; is_bright[1] = 1; is_bright[2] = 1; is_bright[3] = 0;
+    } else {
+        is_bright[0] = 0; is_bright[1] = 1; is_bright[2] = 0; is_bright[3] = 1;
+    }
+}
+
+static void setup_postprocess_params(mlvObject_t *video, gpu_postprocess_params_t *post) {
+    memset(post, 0, sizeof(gpu_postprocess_params_t));
+    post->exposure_gain = 1.0f;
+
+    if (video && video->processing) {
+        for (int i = 0; i < 9; i++) {
+            post->matrix[i] = (float)video->processing->final_matrix[i];
+        }
+        if (video->processing->exposure_stops >= 0.0) {
+            post->exposure_gain = (float)pow(2.0, video->processing->exposure_stops);
+        }
+        post->sharpen_strength = (float)processingGetSharpening(video->processing);
+        post->tone_lut = video->processing->pre_calc_levels;
+        post->has_tone_lut = 1;
+    } else {
+        post->matrix[0] = 1.0f;
+        post->matrix[4] = 1.0f;
+        post->matrix[8] = 1.0f;
+    }
+}
+
+int gpu_pipeline_process_frame_8(
+    mlvObject_t *video,
+    uint64_t frame_index,
+    uint8_t *output_rgb8,
+    int gpu_algorithm
+) {
+    if (!video || !output_rgb8) return 0;
+    if (!gpu_pipeline_is_available()) return 0;
+
+    int width = getMlvWidth(video);
+    int height = getMlvHeight(video);
+    size_t raw_size = (size_t)width * height * sizeof(uint16_t);
+
+    static uint16_t *s_raw_cache = NULL;
+    static size_t s_raw_alloc = 0;
+    if (s_raw_alloc < raw_size) {
+        free(s_raw_cache);
+        s_raw_cache = (uint16_t*)malloc(raw_size);
+        s_raw_alloc = s_raw_cache ? raw_size : 0;
+    }
+    if (!s_raw_cache) return 0;
+
+    if (!load_raw_frame(video, frame_index, s_raw_cache, raw_size)) {
+        return 0;
+    }
+
+    /* Immediately queue prefetch for upcoming frames */
+    for (int f = 1; f <= NUM_PREFETCH_SLOTS; f++) {
+        uint64_t ahead = frame_index + f;
+        if (ahead < getMlvFrames(video)) {
+            trigger_prefetch_slot(video, ahead, frame_index);
+        }
+    }
+
+    int black = getMlvBlackLevel(video);
+    int white = getMlvWhiteLevel(video);
+    int white_darkened = white;
+    int cfa = video->RAWI.raw_info.cfa_pattern;
+    if (!cfa) cfa = 0x02010100;
+
+    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
+    float corr_ev = 0.0f;
+    float overlap = 3.0f;
+    int is_bright[4] = { 0, 1, 0, 1 };
+
+    if (is_dual_iso) {
+        setup_dualiso_params(video, black, white, &corr_ev, &overlap, &white_darkened, is_bright);
+    }
+
+    int algo = GPU_DEBAYER_FAST;
+    if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
+    else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
+
+    gpu_postprocess_params_t post;
+    setup_postprocess_params(video, &post);
+
+    int success = opencl_process_full_frame(
+        NULL,
+        output_rgb8,
+        s_raw_cache,
+        width,
+        height,
+        black,
+        white,
+        white_darkened,
+        cfa,
+        is_dual_iso,
+        corr_ev,
+        overlap,
+        is_bright,
+        algo,
+        &post
+    );
+
+    return success;
 }
 
 int gpu_pipeline_process_frame(
@@ -33,62 +358,51 @@ int gpu_pipeline_process_frame(
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
-    size_t pixels_count = (size_t)width * height;
-    size_t raw_size = pixels_count * sizeof(uint16_t);
+    size_t raw_size = (size_t)width * height * sizeof(uint16_t);
 
-    uint16_t *raw_frame = (uint16_t *)malloc(raw_size);
-    if (!raw_frame) return 0;
+    static uint16_t *s_raw_cache_16 = NULL;
+    static size_t s_raw_alloc_16 = 0;
+    if (s_raw_alloc_16 < raw_size) {
+        free(s_raw_cache_16);
+        s_raw_cache_16 = (uint16_t*)malloc(raw_size);
+        s_raw_alloc_16 = s_raw_cache_16 ? raw_size : 0;
+    }
+    if (!s_raw_cache_16) return 0;
 
-    if (getMlvRawFrameUint16(video, frame_index, raw_frame) != 0) {
-        free(raw_frame);
+    if (!load_raw_frame(video, frame_index, s_raw_cache_16, raw_size)) {
         return 0;
     }
 
-    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-    int saved_diso = 0;
-
-    /* Apply low-level raw fixes (bad pixels, focus pixels, pattern noise) on CPU */
-    if (video->llrawproc) {
-        saved_diso = video->llrawproc->dual_iso;
-        if (is_dual_iso) {
-            video->llrawproc->dual_iso = 0; /* Temporarily bypass CPU dual ISO */
+    for (int f = 1; f <= NUM_PREFETCH_SLOTS; f++) {
+        uint64_t ahead = frame_index + f;
+        if (ahead < getMlvFrames(video)) {
+            trigger_prefetch_slot(video, ahead, frame_index);
         }
-        applyLLRawProcObject(video, raw_frame, raw_size);
-        video->llrawproc->dual_iso = saved_diso;
     }
 
     int black = getMlvBlackLevel(video);
     int white = getMlvWhiteLevel(video);
     int white_darkened = white;
     int cfa = video->RAWI.raw_info.cfa_pattern;
+    if (!cfa) cfa = 0x02010100;
 
+    int is_dual_iso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso);
     float corr_ev = 0.0f;
     float overlap = 3.0f;
     int is_bright[4] = { 0, 1, 0, 1 };
 
     if (is_dual_iso) {
-        int diso1 = video->llrawproc->diso1;
-        int diso2 = video->llrawproc->diso2;
-        if (diso1 > 0 && diso2 > 0) {
-            corr_ev = (float)fabs(log2((double)diso2 / (double)diso1));
-            overlap = fmax(0.5f, 11.0f - corr_ev);
-            white_darkened = (int)((white - black) * pow(2.0, -(double)corr_ev) + black);
-        }
-        int pattern = video->llrawproc->diso_pattern;
-        /* Default row brightness pattern based on ML DISO block */
-        if (pattern == 1) {
-            is_bright[0] = 1; is_bright[1] = 0; is_bright[2] = 1; is_bright[3] = 0;
-        } else {
-            is_bright[0] = 0; is_bright[1] = 1; is_bright[2] = 0; is_bright[3] = 1;
-        }
+        setup_dualiso_params(video, black, white, &corr_ev, &overlap, &white_darkened, is_bright);
     }
 
-    int algo = (gpu_algorithm == GPU_ALGO_CINEMA) ? GPU_DEBAYER_CINEMA : GPU_DEBAYER_FAST;
+    int algo = GPU_DEBAYER_FAST;
+    if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
+    else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
 
     int success = opencl_process_full_frame(
         output_rgb16,
         NULL,
-        raw_frame,
+        s_raw_cache_16,
         width,
         height,
         black,
@@ -99,10 +413,10 @@ int gpu_pipeline_process_frame(
         corr_ev,
         overlap,
         is_bright,
-        algo
+        algo,
+        NULL
     );
 
-    free(raw_frame);
     return success;
 }
 
@@ -116,10 +430,9 @@ int gpu_pipeline_dualiso_to_bayer(
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
-    size_t pixels_count = (size_t)width * height;
-    size_t raw_size = pixels_count * sizeof(uint16_t);
+    size_t raw_size = (size_t)width * height * sizeof(uint16_t);
 
-    uint16_t *raw_frame = (uint16_t *)malloc(raw_size);
+    uint16_t *raw_frame = (uint16_t*)malloc(raw_size);
     if (!raw_frame) return 0;
 
     if (getMlvRawFrameUint16(video, frame_index, raw_frame) != 0) {
@@ -127,9 +440,8 @@ int gpu_pipeline_dualiso_to_bayer(
         return 0;
     }
 
-    int saved_diso = 0;
     if (video->llrawproc) {
-        saved_diso = video->llrawproc->dual_iso;
+        int saved_diso = video->llrawproc->dual_iso;
         video->llrawproc->dual_iso = 0;
         applyLLRawProcObject(video, raw_frame, raw_size);
         video->llrawproc->dual_iso = saved_diso;
@@ -143,19 +455,7 @@ int gpu_pipeline_dualiso_to_bayer(
     float overlap = 3.0f;
     int is_bright[4] = { 0, 1, 0, 1 };
 
-    int diso1 = video->llrawproc ? video->llrawproc->diso1 : 100;
-    int diso2 = video->llrawproc ? video->llrawproc->diso2 : 800;
-    if (diso1 > 0 && diso2 > 0) {
-        corr_ev = (float)fabs(log2((double)diso2 / (double)diso1));
-        overlap = fmax(0.5f, 11.0f - corr_ev);
-        white_darkened = (int)((white - black) * pow(2.0, -(double)corr_ev) + black);
-    }
-    int pattern = video->llrawproc ? video->llrawproc->diso_pattern : 0;
-    if (pattern == 1) {
-        is_bright[0] = 1; is_bright[1] = 0; is_bright[2] = 1; is_bright[3] = 0;
-    } else {
-        is_bright[0] = 0; is_bright[1] = 1; is_bright[2] = 0; is_bright[3] = 1;
-    }
+    setup_dualiso_params(video, black, white, &corr_ev, &overlap, &white_darkened, is_bright);
 
     int success = opencl_dualiso_process(
         bayer_fused_out,

@@ -25,6 +25,7 @@
 
 /* Debayering module */
 #include "../debayer/debayer.h"
+#include "../debayer/gpu_pipeline.h"
 /* Processing module */
 #include "../processing/raw_processing.h"
 
@@ -306,7 +307,8 @@ int getMlvRawFrameUint16(mlvObject_t * video, uint64_t frameIndex, uint16_t * un
     }
     else
     {
-        if (fread(&video->VIDF, sizeof(mlv_vidf_hdr_t), 1, file) != 1)
+        mlv_vidf_hdr_t vidf_hdr;
+        if (fread(&vidf_hdr, sizeof(mlv_vidf_hdr_t), 1, file) != 1)
         {
             DEBUG( printf("Frame header read error\n"); )
             free(raw_frame);
@@ -661,7 +663,7 @@ void getMlvRawFrameDebayered(mlvObject_t * video, uint64_t frameIndex, uint16_t 
 
         case MLV_FRAME_BEING_CACHED:
         {
-            if (doesMlvAlwaysUseAmaze(video) && isMlvObjectCaching(video))
+            if (doesMlvAlwaysUseAmaze(video) == 1 && isMlvObjectCaching(video))
             {
                 while (video->cached_frames[frameIndex] != MLV_FRAME_IS_CACHED) usleep(100);
                 memcpy(outputFrame, video->rgb_raw_frames[frameIndex], frame_size);
@@ -684,6 +686,18 @@ void getMlvRawFrameDebayered(mlvObject_t * video, uint64_t frameIndex, uint16_t 
  * it may have minor artifacts (though I haven't found them yet) */
 void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t * outputFrame, int threads)
 {
+    if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
+    {
+        int algo = GPU_ALGO_FAST;
+        if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
+        else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
+
+        if (gpu_pipeline_process_frame(video, frameIndex, outputFrame, algo))
+        {
+            return;
+        }
+    }
+
     /* Useful */
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
@@ -710,6 +724,18 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
 /* Get a processed frame in 8 bit */
 void getMlvProcessedFrame8(mlvObject_t * video, uint64_t frameIndex, uint8_t * outputFrame, int threads)
 {
+    if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
+    {
+        int algo = GPU_ALGO_FAST;
+        if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
+        else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
+
+        if (gpu_pipeline_process_frame_8(video, frameIndex, outputFrame, algo))
+        {
+            return;
+        }
+    }
+
     /* Size of RAW frame */
     int rgb_frame_size = getMlvWidth(video) * getMlvHeight(video) * 3;
 

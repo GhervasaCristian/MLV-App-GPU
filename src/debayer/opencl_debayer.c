@@ -4,6 +4,7 @@
 #include "opencl_rcd_kernels.h"
 #include "opencl_rcdv2_kernels.h"
 #include "opencl_dualiso_kernels.h"
+#include "opencl_postprocess_kernels.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +39,8 @@ static cl_kernel s_k_rcdv2_step4 = NULL;
 static cl_program s_prog_diso = NULL;
 static cl_kernel s_k_diso_interp = NULL;
 static cl_kernel s_k_diso_fusion = NULL;
+static cl_program s_prog_post = NULL;
+static cl_kernel s_k_postprocess = NULL;
 
 /* Reusable VRAM Buffers */
 static cl_mem s_buf_raw = NULL;
@@ -50,6 +53,10 @@ static cl_mem s_buf_diff_b = NULL;
 static cl_mem s_buf_diso_dark = NULL;
 static cl_mem s_buf_diso_bright = NULL;
 static cl_mem s_buf_rgb = NULL;
+static cl_mem s_buf_rgb8 = NULL;
+static cl_mem s_buf_matrix = NULL;
+static cl_mem s_buf_tone_lut = NULL;
+static cl_mem s_buf_rgb_processed = NULL;
 
 static int s_buf_width = 0;
 static int s_buf_height = 0;
@@ -69,6 +76,10 @@ static int ensure_buffers(int width, int height) {
     if (s_buf_diso_dark) { cl_ReleaseMemObject(s_buf_diso_dark); s_buf_diso_dark = NULL; }
     if (s_buf_diso_bright) { cl_ReleaseMemObject(s_buf_diso_bright); s_buf_diso_bright = NULL; }
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
+    if (s_buf_rgb8) { cl_ReleaseMemObject(s_buf_rgb8); s_buf_rgb8 = NULL; }
+    if (s_buf_matrix) { cl_ReleaseMemObject(s_buf_matrix); s_buf_matrix = NULL; }
+    if (s_buf_tone_lut) { cl_ReleaseMemObject(s_buf_tone_lut); s_buf_tone_lut = NULL; }
+    if (s_buf_rgb_processed) { cl_ReleaseMemObject(s_buf_rgb_processed); s_buf_rgb_processed = NULL; }
 
     cl_int err = CL_SUCCESS;
     size_t num_pixels = (size_t)width * height;
@@ -101,6 +112,10 @@ static int ensure_buffers(int width, int height) {
     if (err != CL_SUCCESS) return 0;
 
     s_buf_rgb = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * 3 * sizeof(uint16_t), NULL, &err);
+    s_buf_rgb8 = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * 3 * sizeof(uint8_t), NULL, &err);
+    s_buf_matrix = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, 9 * sizeof(float), NULL, &err);
+    s_buf_tone_lut = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, 65536 * sizeof(uint16_t), NULL, &err);
+    s_buf_rgb_processed = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * 3 * sizeof(uint16_t), NULL, &err);
     if (err != CL_SUCCESS) return 0;
 
     s_buf_width = width;
@@ -225,6 +240,10 @@ int opencl_debayer_init(void) {
         s_k_diso_interp = cl_CreateKernel(s_prog_diso, "k_dualiso_interpolate", &err);
         s_k_diso_fusion = cl_CreateKernel(s_prog_diso, "k_dualiso_fusion", &err);
     }
+    s_prog_post = build_program(s_ctx, selected_device, s_opencl_postprocess_source);
+    if (s_prog_post) {
+        s_k_postprocess = cl_CreateKernel(s_prog_post, "k_postprocess_frame", &err);
+    }
 
     if (!s_k_mg_fast || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_rcdv2_step1 || !s_k_rcdv2_step2 || !s_k_rcdv2_step3 || !s_k_rcdv2_step4 || !s_k_diso_interp || !s_k_diso_fusion) {
         opencl_debayer_free();
@@ -252,6 +271,10 @@ void opencl_debayer_free(void) {
     if (s_buf_diso_dark) { cl_ReleaseMemObject(s_buf_diso_dark); s_buf_diso_dark = NULL; }
     if (s_buf_diso_bright) { cl_ReleaseMemObject(s_buf_diso_bright); s_buf_diso_bright = NULL; }
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
+    if (s_buf_rgb8) { cl_ReleaseMemObject(s_buf_rgb8); s_buf_rgb8 = NULL; }
+    if (s_buf_matrix) { cl_ReleaseMemObject(s_buf_matrix); s_buf_matrix = NULL; }
+    if (s_buf_tone_lut) { cl_ReleaseMemObject(s_buf_tone_lut); s_buf_tone_lut = NULL; }
+    if (s_buf_rgb_processed) { cl_ReleaseMemObject(s_buf_rgb_processed); s_buf_rgb_processed = NULL; }
     s_buf_width = s_buf_height = 0;
 
     if (s_k_mg_fast) { cl_ReleaseKernel(s_k_mg_fast); s_k_mg_fast = NULL; }
@@ -271,6 +294,8 @@ void opencl_debayer_free(void) {
     if (s_k_diso_interp) { cl_ReleaseKernel(s_k_diso_interp); s_k_diso_interp = NULL; }
     if (s_k_diso_fusion) { cl_ReleaseKernel(s_k_diso_fusion); s_k_diso_fusion = NULL; }
     if (s_prog_diso) { cl_ReleaseProgram(s_prog_diso); s_prog_diso = NULL; }
+    if (s_k_postprocess) { cl_ReleaseKernel(s_k_postprocess); s_k_postprocess = NULL; }
+    if (s_prog_post) { cl_ReleaseProgram(s_prog_post); s_prog_post = NULL; }
 
     if (s_queue) { cl_ReleaseCommandQueue(s_queue); s_queue = NULL; }
     if (s_ctx) { cl_ReleaseContext(s_ctx); s_ctx = NULL; }
@@ -526,6 +551,44 @@ int opencl_dualiso_process(
     return (err == CL_SUCCESS);
 }
 
+static int execute_postprocess(
+    int width, int height,
+    const gpu_postprocess_params_t *params,
+    int output_8bit
+) {
+    if (!s_k_postprocess || !params) return 0;
+
+    cl_int err;
+    err = cl_EnqueueWriteBuffer(s_queue, s_buf_matrix, CL_FALSE, 0, 9 * sizeof(float), params->matrix, 0, NULL, NULL);
+    if (err != CL_SUCCESS) return 0;
+
+    int has_tone = (params->has_tone_lut && params->tone_lut != NULL);
+    if (has_tone) {
+        err = cl_EnqueueWriteBuffer(s_queue, s_buf_tone_lut, CL_FALSE, 0, 65536 * sizeof(uint16_t), params->tone_lut, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+    }
+
+    cl_mem out8 = output_8bit ? s_buf_rgb8 : NULL;
+    cl_mem out16 = output_8bit ? NULL : s_buf_rgb_processed;
+
+    cl_SetKernelArg(s_k_postprocess, 0, sizeof(cl_mem), &s_buf_rgb);
+    cl_SetKernelArg(s_k_postprocess, 1, sizeof(cl_mem), &out8);
+    cl_SetKernelArg(s_k_postprocess, 2, sizeof(cl_mem), &out16);
+    cl_SetKernelArg(s_k_postprocess, 3, sizeof(int), &width);
+    cl_SetKernelArg(s_k_postprocess, 4, sizeof(int), &height);
+    cl_SetKernelArg(s_k_postprocess, 5, sizeof(cl_mem), &s_buf_matrix);
+    cl_SetKernelArg(s_k_postprocess, 6, sizeof(float), &params->exposure_gain);
+    cl_SetKernelArg(s_k_postprocess, 7, sizeof(cl_mem), has_tone ? &s_buf_tone_lut : &s_buf_matrix);
+    cl_SetKernelArg(s_k_postprocess, 8, sizeof(float), &params->sharpen_strength);
+    cl_SetKernelArg(s_k_postprocess, 9, sizeof(int), &has_tone);
+
+    size_t global_ws[2] = { ((size_t)width + 15) / 16 * 16, ((size_t)height + 15) / 16 * 16 };
+    size_t local_ws[2]  = { 16, 16 };
+
+    err = cl_EnqueueNDRangeKernel(s_queue, s_k_postprocess, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+    return (err == CL_SUCCESS);
+}
+
 int opencl_process_full_frame(
     uint16_t *rgb_out_16,
     uint8_t *rgb_out_8,
@@ -540,7 +603,8 @@ int opencl_process_full_frame(
     float corr_ev,
     float overlap,
     const int is_bright[4],
-    int algorithm
+    int algorithm,
+    const gpu_postprocess_params_t *post_params
 ) {
     (void)black;
     (void)white;
@@ -575,24 +639,34 @@ int opencl_process_full_frame(
         return 0;
     }
 
-    if (rgb_out_16) {
-        err = cl_EnqueueReadBuffer(s_queue, s_buf_rgb, CL_TRUE, 0, rgb_size, rgb_out_16, 0, NULL, NULL);
-    } else if (rgb_out_8) {
-        /* Read back to temporary or mapped memory and quantize to 8-bit */
-        uint16_t* tmp_16 = (uint16_t*)malloc(rgb_size);
-        if (tmp_16) {
-            err = cl_EnqueueReadBuffer(s_queue, s_buf_rgb, CL_TRUE, 0, rgb_size, tmp_16, 0, NULL, NULL);
-            if (err == CL_SUCCESS) {
-                size_t num_components = (size_t)width * height * 3;
-                #pragma omp parallel for
-                for (size_t i = 0; i < num_components; i++) {
-                    rgb_out_8[i] = (uint8_t)(tmp_16[i] >> 8);
-                }
-            }
-            free(tmp_16);
+    int did_postprocess = 0;
+    if (post_params && s_k_postprocess) {
+        did_postprocess = execute_postprocess(width, height, post_params, (rgb_out_8 != NULL));
+    }
+
+    if (rgb_out_8) {
+        if (did_postprocess) {
+            size_t rgb8_size = (size_t)width * height * 3 * sizeof(uint8_t);
+            err = cl_EnqueueReadBuffer(s_queue, s_buf_rgb8, CL_TRUE, 0, rgb8_size, rgb_out_8, 0, NULL, NULL);
         } else {
-            err = -1;
+            uint16_t* tmp_16 = (uint16_t*)malloc(rgb_size);
+            if (tmp_16) {
+                err = cl_EnqueueReadBuffer(s_queue, s_buf_rgb, CL_TRUE, 0, rgb_size, tmp_16, 0, NULL, NULL);
+                if (err == CL_SUCCESS) {
+                    size_t num_components = (size_t)width * height * 3;
+                    #pragma omp parallel for
+                    for (size_t i = 0; i < num_components; i++) {
+                        rgb_out_8[i] = (uint8_t)(tmp_16[i] >> 8);
+                    }
+                }
+                free(tmp_16);
+            } else {
+                err = -1;
+            }
         }
+    } else if (rgb_out_16) {
+        cl_mem read_target = did_postprocess ? s_buf_rgb_processed : s_buf_rgb;
+        err = cl_EnqueueReadBuffer(s_queue, read_target, CL_TRUE, 0, rgb_size, rgb_out_16, 0, NULL, NULL);
     }
 
     pthread_mutex_unlock(&s_ocl_mutex);

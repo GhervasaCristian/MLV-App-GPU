@@ -128,7 +128,7 @@ public:
                                   Scripting *scripting = 0,
                                   uint8_t currentCodecProfile = 0,
                                   uint8_t currentCodecOption = 0,
-                                  uint8_t debayerMode = 1,
+                                  uint8_t debayerMode = 7,
                                   bool resize = false,
                                   uint16_t resizeWidth = 1920,
                                   uint16_t resizeHeight = 1080,

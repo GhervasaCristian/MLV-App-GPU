@@ -9,178 +9,184 @@
 #include <math.h>
 #include <pthread.h>
 
-#define NUM_PREFETCH_SLOTS 8
+#define RING_SIZE 4
 
 typedef struct {
     uint16_t *buffer;
     size_t alloc_bytes;
     uint64_t frame_index;
     mlvObject_t *video;
-    volatile int state; /* 0: empty, 1: loading, 2: ready */
-    pthread_t thread;
-} prefetch_slot_t;
+    int is_preview;
+    volatile int ready; /* 0: empty/invalid, 1: ready */
+} ring_slot_t;
 
-static prefetch_slot_t s_slots[NUM_PREFETCH_SLOTS];
-static pthread_mutex_t s_prefetch_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  s_prefetch_cond  = PTHREAD_COND_INITIALIZER;
+static ring_slot_t s_ring[RING_SIZE];
+static pthread_mutex_t s_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  s_ring_cond  = PTHREAD_COND_INITIALIZER;
+static pthread_t       s_worker_thread;
+static volatile int    s_worker_started = 0;
+static volatile int    s_worker_running = 1;
+static mlvObject_t*    s_active_video = NULL;
+static volatile uint64_t s_prefetch_next = 0;
+static volatile int    s_prefetch_is_preview = 1;
 
-typedef struct {
-    int slot_id;
-    mlvObject_t *video;
-    uint64_t frame_index;
-} worker_arg_t;
+static void* prefetch_worker_func(void* arg) {
+    (void)arg;
+    while (s_worker_running) {
+        pthread_mutex_lock(&s_ring_mutex);
 
-static void* prefetch_slot_worker(void* arg) {
-    worker_arg_t *w = (worker_arg_t*)arg;
-    int slot = w->slot_id;
-    mlvObject_t *video = w->video;
-    uint64_t frame_index = w->frame_index;
-    free(w);
+        while (s_worker_running && !s_active_video) {
+            pthread_cond_wait(&s_ring_cond, &s_ring_mutex);
+        }
+        if (!s_worker_running) {
+            pthread_mutex_unlock(&s_ring_mutex);
+            break;
+        }
 
-    pthread_mutex_lock(&s_prefetch_mutex);
-    uint16_t *dest = s_slots[slot].buffer;
-    pthread_mutex_unlock(&s_prefetch_mutex);
+        mlvObject_t *video = s_active_video;
+        uint64_t target = s_prefetch_next;
+        int is_prev = s_prefetch_is_preview;
+        uint64_t total_frames = video ? getMlvFrames(video) : 0;
 
-    int ok = 0;
-    if (video && dest) {
-        ok = (getMlvRawFrameUint16(video, frame_index, dest) == 0);
+        if (!video || target >= total_frames) {
+            /* Past end of file or no video: sleep until consumer changes position */
+            pthread_cond_wait(&s_ring_cond, &s_ring_mutex);
+            pthread_mutex_unlock(&s_ring_mutex);
+            continue;
+        }
+
+        /* Check if target frame is already in ring */
+        int already_present = 0;
+        for (int i = 0; i < RING_SIZE; i++) {
+            if (s_ring[i].video == video && s_ring[i].frame_index == target && s_ring[i].ready && s_ring[i].is_preview == is_prev) {
+                already_present = 1;
+                break;
+            }
+        }
+        if (already_present) {
+            s_prefetch_next = target + 1;
+            pthread_mutex_unlock(&s_ring_mutex);
+            continue;
+        }
+
+        /* Find an empty slot in ring */
+        int slot = -1;
+        for (int i = 0; i < RING_SIZE; i++) {
+            if (!s_ring[i].ready) {
+                slot = i;
+                break;
+            }
+        }
+
+        if (slot < 0) {
+            /* All slots full: wait for consumer to take a frame */
+            pthread_cond_wait(&s_ring_cond, &s_ring_mutex);
+            pthread_mutex_unlock(&s_ring_mutex);
+            continue;
+        }
+
+        /* Reserve slot */
+        s_ring[slot].video = video;
+        s_ring[slot].frame_index = target;
+        s_ring[slot].is_preview = is_prev;
+        s_ring[slot].ready = 0;
+
+        int width = getMlvWidth(video);
+        int height = getMlvHeight(video);
+        size_t needed = (size_t)width * height * sizeof(uint16_t);
+
+        if (s_ring[slot].alloc_bytes < needed) {
+            free(s_ring[slot].buffer);
+            s_ring[slot].buffer = (uint16_t*)malloc(needed);
+            s_ring[slot].alloc_bytes = s_ring[slot].buffer ? needed : 0;
+        }
+        uint16_t *dest = s_ring[slot].buffer;
+        s_prefetch_next = target + 1;
+        pthread_mutex_unlock(&s_ring_mutex);
+
+        if (!dest) continue;
+
+        /* Load raw frame without holding ring mutex */
+        int ok = (getMlvRawFrameUint16(video, target, dest) == 0);
         if (ok && video->llrawproc) {
             int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
             int saved_averaging = video->llrawproc->diso_averaging;
             int saved_chroma = video->llrawproc->chroma_smooth;
 
-            if (is_dual_iso) {
+            if (is_dual_iso && is_prev) {
                 video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
-                video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 CPU blur during playback */
+                video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 blur during playback */
             }
 
-            int width = getMlvWidth(video);
-            int height = getMlvHeight(video);
-            size_t raw_size = (size_t)width * height * sizeof(uint16_t);
-            applyLLRawProcObject(video, dest, raw_size);
+            applyLLRawProcObject(video, dest, needed);
 
-            if (is_dual_iso) {
+            if (is_dual_iso && is_prev) {
                 video->llrawproc->diso_averaging = saved_averaging;
                 video->llrawproc->chroma_smooth = saved_chroma;
             }
         }
-    }
 
-    pthread_mutex_lock(&s_prefetch_mutex);
-    if (s_slots[slot].video == video && s_slots[slot].frame_index == frame_index) {
-        s_slots[slot].state = ok ? 2 : 0;
+        pthread_mutex_lock(&s_ring_mutex);
+        if (s_ring[slot].video == video && s_ring[slot].frame_index == target && s_ring[slot].is_preview == is_prev) {
+            s_ring[slot].ready = ok ? 1 : 0;
+        }
+        pthread_cond_broadcast(&s_ring_cond);
+        pthread_mutex_unlock(&s_ring_mutex);
     }
-    pthread_cond_broadcast(&s_prefetch_cond);
-    pthread_mutex_unlock(&s_prefetch_mutex);
-
     return NULL;
 }
 
-static void evict_stale_slots_locked(mlvObject_t *video, uint64_t current_frame) {
-    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
-        if (s_slots[i].state == 2) {
-            /* Ready slot: if from different video or in the past, evict immediately */
-            if (s_slots[i].video != video || s_slots[i].frame_index < current_frame) {
-                s_slots[i].state = 0;
-            }
+static void start_worker_if_needed(void) {
+    if (!s_worker_started) {
+        pthread_mutex_lock(&s_ring_mutex);
+        if (!s_worker_started) {
+            s_worker_running = 1;
+            pthread_create(&s_worker_thread, NULL, prefetch_worker_func, NULL);
+            s_worker_started = 1;
         }
+        pthread_mutex_unlock(&s_ring_mutex);
     }
-}
-
-static void trigger_prefetch_slot(mlvObject_t *video, uint64_t frame_index, uint64_t current_frame) {
-    if (!video || frame_index >= getMlvFrames(video)) return;
-
-    pthread_mutex_lock(&s_prefetch_mutex);
-
-    evict_stale_slots_locked(video, current_frame);
-
-    /* Check if already in slots */
-    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
-        if (s_slots[i].video == video && s_slots[i].frame_index == frame_index && s_slots[i].state != 0) {
-            pthread_mutex_unlock(&s_prefetch_mutex);
-            return;
-        }
-    }
-
-    /* Find an empty slot */
-    int target_slot = -1;
-    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
-        if (s_slots[i].state == 0) {
-            target_slot = i;
-            break;
-        }
-    }
-
-    /* If no empty slot, check for slots that are too far ahead */
-    if (target_slot < 0) {
-        for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
-            if (s_slots[i].state == 2 && s_slots[i].frame_index > current_frame + NUM_PREFETCH_SLOTS) {
-                s_slots[i].state = 0;
-                target_slot = i;
-                break;
-            }
-        }
-    }
-
-    if (target_slot < 0) {
-        pthread_mutex_unlock(&s_prefetch_mutex);
-        return;
-    }
-
-    int width = getMlvWidth(video);
-    int height = getMlvHeight(video);
-    size_t needed = (size_t)width * height * sizeof(uint16_t);
-
-    if (s_slots[target_slot].alloc_bytes < needed) {
-        free(s_slots[target_slot].buffer);
-        s_slots[target_slot].buffer = (uint16_t*)malloc(needed);
-        s_slots[target_slot].alloc_bytes = s_slots[target_slot].buffer ? needed : 0;
-    }
-
-    if (!s_slots[target_slot].buffer) {
-        pthread_mutex_unlock(&s_prefetch_mutex);
-        return;
-    }
-
-    s_slots[target_slot].video = video;
-    s_slots[target_slot].frame_index = frame_index;
-    s_slots[target_slot].state = 1; /* loading */
-
-    worker_arg_t *w = (worker_arg_t*)malloc(sizeof(worker_arg_t));
-    w->slot_id = target_slot;
-    w->video = video;
-    w->frame_index = frame_index;
-
-    pthread_create(&s_slots[target_slot].thread, NULL, prefetch_slot_worker, w);
-    pthread_detach(s_slots[target_slot].thread);
-
-    pthread_mutex_unlock(&s_prefetch_mutex);
 }
 
 void gpu_pipeline_trigger_prefetch(mlvObject_t *video, uint64_t next_frame_index) {
-    for (int f = 0; f < NUM_PREFETCH_SLOTS; f++) {
-        uint64_t ahead = next_frame_index + f;
-        if (video && ahead < getMlvFrames(video)) {
-            trigger_prefetch_slot(video, ahead, next_frame_index);
-        }
+    if (!video) return;
+    start_worker_if_needed();
+    pthread_mutex_lock(&s_ring_mutex);
+    s_active_video = video;
+    if (s_prefetch_next < next_frame_index) {
+        s_prefetch_next = next_frame_index;
     }
+    pthread_cond_signal(&s_ring_cond);
+    pthread_mutex_unlock(&s_ring_mutex);
 }
 
 int gpu_pipeline_init(void) {
+    start_worker_if_needed();
     return opencl_debayer_init();
 }
 
 void gpu_pipeline_free(void) {
-    pthread_mutex_lock(&s_prefetch_mutex);
-    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
-        if (s_slots[i].buffer) {
-            free(s_slots[i].buffer);
-            s_slots[i].buffer = NULL;
-            s_slots[i].alloc_bytes = 0;
-        }
-        s_slots[i].state = 0;
+    pthread_mutex_lock(&s_ring_mutex);
+    s_worker_running = 0;
+    pthread_cond_broadcast(&s_ring_cond);
+    pthread_mutex_unlock(&s_ring_mutex);
+
+    if (s_worker_started) {
+        pthread_join(s_worker_thread, NULL);
+        s_worker_started = 0;
     }
-    pthread_mutex_unlock(&s_prefetch_mutex);
+
+    pthread_mutex_lock(&s_ring_mutex);
+    for (int i = 0; i < RING_SIZE; i++) {
+        if (s_ring[i].buffer) {
+            free(s_ring[i].buffer);
+            s_ring[i].buffer = NULL;
+            s_ring[i].alloc_bytes = 0;
+        }
+        s_ring[i].ready = 0;
+    }
+    s_active_video = NULL;
+    pthread_mutex_unlock(&s_ring_mutex);
 
     opencl_debayer_free();
 }
@@ -194,35 +200,40 @@ const char* gpu_pipeline_device_name(void) {
 }
 
 /* Internal helper: loads frame using prefetch cache when available */
-static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *raw_frame, size_t raw_size) {
-    int found_slot = -1;
+static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *raw_frame, size_t raw_size, int is_preview) {
+    if (!video || !raw_frame) return 0;
+    start_worker_if_needed();
 
-    pthread_mutex_lock(&s_prefetch_mutex);
-    evict_stale_slots_locked(video, frame_index);
+    pthread_mutex_lock(&s_ring_mutex);
+    s_active_video = video;
+    s_prefetch_is_preview = is_preview;
 
-    for (int i = 0; i < NUM_PREFETCH_SLOTS; i++) {
-        if (s_slots[i].video == video && s_slots[i].frame_index == frame_index) {
-            found_slot = i;
-            break;
+    /* Check if target frame is already in ring buffer */
+    for (int i = 0; i < RING_SIZE; i++) {
+        if (s_ring[i].video == video && s_ring[i].frame_index == frame_index && s_ring[i].ready && s_ring[i].is_preview == is_preview) {
+            memcpy(raw_frame, s_ring[i].buffer, raw_size);
+            s_ring[i].ready = 0; /* Consumed */
+
+            if (s_prefetch_next <= frame_index) {
+                s_prefetch_next = frame_index + 1;
+            }
+            pthread_cond_signal(&s_ring_cond);
+            pthread_mutex_unlock(&s_ring_mutex);
+            return 1; /* Cache hit! */
         }
     }
 
-    if (found_slot >= 0) {
-        while (s_slots[found_slot].state == 1) {
-            pthread_cond_wait(&s_prefetch_cond, &s_prefetch_mutex);
-        }
-
-        if (s_slots[found_slot].state == 2 && s_slots[found_slot].buffer) {
-            memcpy(raw_frame, s_slots[found_slot].buffer, raw_size);
-            s_slots[found_slot].state = 0; /* Consumed */
-            evict_stale_slots_locked(video, frame_index + 1);
-            pthread_mutex_unlock(&s_prefetch_mutex);
-            return 1;
+    /* Cache miss: invalidate slots older than requested frame and trigger worker */
+    for (int i = 0; i < RING_SIZE; i++) {
+        if (s_ring[i].video != video || s_ring[i].frame_index <= frame_index) {
+            s_ring[i].ready = 0;
         }
     }
-    pthread_mutex_unlock(&s_prefetch_mutex);
+    s_prefetch_next = frame_index + 1;
+    pthread_cond_signal(&s_ring_cond);
+    pthread_mutex_unlock(&s_ring_mutex);
 
-    /* Cache miss: load synchronously */
+    /* Synchronous read for current frame */
     if (getMlvRawFrameUint16(video, frame_index, raw_frame) != 0) {
         return 0;
     }
@@ -232,14 +243,14 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
         int saved_averaging = video->llrawproc->diso_averaging;
         int saved_chroma = video->llrawproc->chroma_smooth;
 
-        if (is_dual_iso) {
+        if (is_dual_iso && is_preview) {
             video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
             video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 CPU blur during playback */
         }
 
         applyLLRawProcObject(video, raw_frame, raw_size);
 
-        if (is_dual_iso) {
+        if (is_dual_iso && is_preview) {
             video->llrawproc->diso_averaging = saved_averaging;
             video->llrawproc->chroma_smooth = saved_chroma;
         }
@@ -271,15 +282,8 @@ int gpu_pipeline_process_frame_8(
     }
     if (!s_raw_cache) return 0;
 
-    if (!load_raw_frame(video, frame_index, s_raw_cache, raw_size)) {
+    if (!load_raw_frame(video, frame_index, s_raw_cache, raw_size, 1)) {
         return 0;
-    }
-
-    for (int f = 1; f <= NUM_PREFETCH_SLOTS; f++) {
-        uint64_t ahead = frame_index + f;
-        if (ahead < getMlvFrames(video)) {
-            trigger_prefetch_slot(video, ahead, frame_index);
-        }
     }
 
     int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
@@ -373,15 +377,8 @@ int gpu_pipeline_process_frame(
     }
     if (!s_raw_cache_16) return 0;
 
-    if (!load_raw_frame(video, frame_index, s_raw_cache_16, raw_size)) {
+    if (!load_raw_frame(video, frame_index, s_raw_cache_16, raw_size, 0)) {
         return 0;
-    }
-
-    for (int f = 1; f <= NUM_PREFETCH_SLOTS; f++) {
-        uint64_t ahead = frame_index + f;
-        if (ahead < getMlvFrames(video)) {
-            trigger_prefetch_slot(video, ahead, frame_index);
-        }
     }
 
     int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));

@@ -11125,8 +11125,12 @@ void MainWindow::selectDebayerAlgorithm()
     //Do nothing while preview pics are rendered when importing
     if( m_inOpeningProcess ) return;
 
-    //If no playback active change debayer to receipt settings
-    if( !ui->actionPlay->isChecked() || ui->actionDontSwitchDebayerForPlayback->isChecked() )
+    bool isGpuReceipt = (ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_FAST ||
+                         ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_CINEMA ||
+                         ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_CINEMA_V2);
+
+    //If no playback active change debayer to receipt settings (or if GPU debayer is chosen)
+    if( !ui->actionPlay->isChecked() || ui->actionDontSwitchDebayerForPlayback->isChecked() || isGpuReceipt )
     {
         switch( ui->comboBoxDebayer->currentIndex() )
         {

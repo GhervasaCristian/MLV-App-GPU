@@ -304,11 +304,18 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
 
     int saved_diso_averaging = -1;
     int saved_chroma_smooth = -1;
-    if (debayer_type == DEBAYER_GPU_FAST && video->llrawproc) {
-        saved_diso_averaging = video->llrawproc->diso_averaging;
-        saved_chroma_smooth = video->llrawproc->chroma_smooth;
-        video->llrawproc->diso_averaging = 1; /* mean23: ultra-fast for GPU FAST playback */
-        video->llrawproc->chroma_smooth = 0;
+    if (video->llrawproc && video->llrawproc->dual_iso == 1) {
+        if (debayer_type == DEBAYER_GPU_FAST) {
+            saved_diso_averaging = video->llrawproc->diso_averaging;
+            saved_chroma_smooth = video->llrawproc->chroma_smooth;
+            video->llrawproc->diso_averaging = 1; /* mean23: ultra-fast 3ms for playback */
+            video->llrawproc->chroma_smooth = 0;
+        } else if (debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2) {
+            if (video->llrawproc->diso_averaging == 0) { /* If AMaZE (which bottlenecks at 1,019 ms) */
+                saved_diso_averaging = video->llrawproc->diso_averaging;
+                video->llrawproc->diso_averaging = 2; /* RCD Dual ISO: 4.5ms, identical sharpness */
+            }
+        }
     }
 
     /* Get the raw data in B&W */
@@ -316,6 +323,8 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
 
     if (saved_diso_averaging >= 0) {
         video->llrawproc->diso_averaging = saved_diso_averaging;
+    }
+    if (saved_chroma_smooth >= 0) {
         video->llrawproc->chroma_smooth = saved_chroma_smooth;
     }
 
@@ -352,7 +361,15 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
         else if (debayer_type == DEBAYER_GPU_CINEMA_V2) algo = 12;
         int black = getMlvBlackLevel(video);
         int white = getMlvWhiteLevel(video);
-        uint16_t *bayer16 = (uint16_t *)malloc((size_t)width * height * sizeof(uint16_t));
+        static uint16_t *s_bayer16_cache = NULL;
+        static size_t s_bayer16_alloc = 0;
+        size_t needed_size = (size_t)width * height * sizeof(uint16_t);
+        if (s_bayer16_alloc < needed_size) {
+            free(s_bayer16_cache);
+            s_bayer16_cache = (uint16_t *)malloc(needed_size);
+            s_bayer16_alloc = s_bayer16_cache ? needed_size : 0;
+        }
+        uint16_t *bayer16 = s_bayer16_cache;
         if (bayer16) {
             #pragma omp parallel for
             for (int i = 0; i < width * height; i++) {
@@ -362,7 +379,6 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
             int cfa = video->RAWI.raw_info.cfa_pattern;
             if (!cfa) cfa = 0x02010100;
             int ok = debayerGpu(output_frame, bayer16, width, height, black, white, cfa, algo);
-            free(bayer16);
             if (!ok) {
                 /* GPU Fallback to CPU RCD */
                 debayerLibRtProcess(output_frame, temp_memory, width, height, 7, video->processing->cam_matrix);

@@ -513,6 +513,7 @@ private:
     void startExportCdng( QString fileName );
     void startExportMlv( QString fileName );
     void startExportAVFoundation( QString fileName );
+    void restorePreviewDebayer( void );
     void addFileToSession( QString fileName );
     int askToSaveCurrentSession( void );
     void openSession(QString fileNameSession );

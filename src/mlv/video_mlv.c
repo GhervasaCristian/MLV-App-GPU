@@ -696,22 +696,8 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
         if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
         else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
 
-        static uint16_t *s_gpu_debayer_buf = NULL;
-        static size_t s_gpu_debayer_alloc = 0;
-        size_t needed = rgb_frame_size * sizeof(uint16_t);
-        if (s_gpu_debayer_alloc < needed) {
-            free(s_gpu_debayer_buf);
-            s_gpu_debayer_buf = (uint16_t*)malloc(needed);
-            s_gpu_debayer_alloc = s_gpu_debayer_buf ? needed : 0;
-        }
-
-        if (s_gpu_debayer_buf && gpu_pipeline_process_frame(video, frameIndex, s_gpu_debayer_buf, algo))
+        if (gpu_pipeline_process_frame(video, frameIndex, outputFrame, algo))
         {
-            applyProcessingObject( video->processing,
-                                   width, height,
-                                   s_gpu_debayer_buf,
-                                   outputFrame,
-                                   threads, 1, frameIndex );
             return;
         }
     }

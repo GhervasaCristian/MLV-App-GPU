@@ -14,11 +14,13 @@ enum {
 };
 
 typedef struct {
-    float matrix[9];             /* 3x3 combined color matrix */
+    float matrix[9];             /* 3x3 camera matrix (proper_wb_matrix) */
+    float wb_mult[3];            /* d0, d4, d8 (white balance multipliers from final_matrix) */
     const uint16_t *levels_lut;  /* 65536-entry pre_calc_levels LUT */
-    const uint16_t *gamma_lut;   /* 65536-entry pre_calc_gamma LUT */
+    const uint16_t *gamma_lut;   /* 65536-entry composed gamma + contrast LUT */
     float sharpen_strength;      /* 0.0 to 1.0 (1.0 = 100% sharpness) */
     float rgb_to_Y[3];           /* Gamut compression luma weights */
+    int agx;                     /* AgX mode flag */
 } gpu_postprocess_params_t;
 
 int opencl_debayer_init(void);

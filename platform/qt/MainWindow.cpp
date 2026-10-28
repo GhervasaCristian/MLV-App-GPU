@@ -1965,7 +1965,7 @@ void MainWindow::startExportPipe(QString fileName)
         }
 
         //If we don't like amaze we switch it off again
-        if( !ui->actionAlwaysUseAMaZE->isChecked() ) { setMlvDontAlwaysUseAmaze( m_pMlvObject ); }
+        restorePreviewDebayer();
 
         //Enable GUI drawing
         m_dontDraw = false;
@@ -2888,7 +2888,7 @@ void MainWindow::startExportPipe(QString fileName)
     }*/
 
     //If we don't like amaze we switch it off again
-    if( !ui->actionAlwaysUseAMaZE->isChecked() ) { setMlvDontAlwaysUseAmaze( m_pMlvObject ); }
+    restorePreviewDebayer();
 
     //Enable GUI drawing
     m_dontDraw = false;
@@ -2898,6 +2898,60 @@ void MainWindow::startExportPipe(QString fileName)
 }
 
 //CDNG output
+
+void MainWindow::restorePreviewDebayer( void )
+{
+    if( !m_pMlvObject ) return;
+    if( ui->actionAlwaysUseAMaZE->isChecked() )
+    {
+        setMlvAlwaysUseAmaze( m_pMlvObject );
+    }
+    else if( ui->actionUseNoneDebayer->isChecked() )
+    {
+        setMlvUseNoneDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseSimpleDebayer->isChecked() )
+    {
+        setMlvUseSimpleDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseLmmseDebayer->isChecked() )
+    {
+        setMlvUseLmmseDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseGpuLmmseDebayer->isChecked() )
+    {
+        setMlvUseGpuFastDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseGpuCinemaDebayer->isChecked() )
+    {
+        setMlvUseGpuCinemaDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseGpuCinemaV2Debayer->isChecked() )
+    {
+        setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+    }
+    else if( ui->actionUseIgvDebayer->isChecked() )
+    {
+        setMlvUseIgvDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseAhdDebayer->isChecked() )
+    {
+        setMlvUseAhdDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseRcdDebayer->isChecked() )
+    {
+        setMlvUseRcdDebayer( m_pMlvObject );
+    }
+    else if( ui->actionUseDcbDebayer->isChecked() )
+    {
+        setMlvUseDcbDebayer( m_pMlvObject );
+    }
+    else
+    {
+        setMlvDontAlwaysUseAmaze( m_pMlvObject );
+    }
+}
+
 void MainWindow::startExportCdng(QString fileName)
 {
     // Prevents resuming (double-clicks on the pause button) while the parallel loop is still running
@@ -2907,8 +2961,80 @@ void MainWindow::startExportCdng(QString fileName)
     //Disable GUI drawing
     m_dontDraw = true;
 
-    // we always get amaze frames for exporting
-    setMlvAlwaysUseAmaze( m_pMlvObject );
+    // choose if we want to get amaze frames for exporting, or bilinear / GPU
+    if( m_exportDebayerMode == 0 )
+    {
+        setMlvDontAlwaysUseAmaze( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 1 )
+    {
+        setMlvAlwaysUseAmaze( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 2 )
+    {
+        setMlvUseLmmseDebayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 3 )
+    {
+        setMlvUseIgvDebayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 4 )
+    {
+        setMlvUseGpuFastDebayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 5 )
+    {
+        setMlvUseGpuCinemaDebayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 6 )
+    {
+        setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+    }
+    else
+    {
+        switch( m_exportQueue.first()->debayer() )
+        {
+        case ReceiptSettings::None:
+            setMlvUseNoneDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::Simple:
+            setMlvUseSimpleDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::Bilinear:
+            setMlvDontAlwaysUseAmaze( m_pMlvObject );
+            break;
+        case ReceiptSettings::LMMSE:
+            setMlvUseLmmseDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::IGV:
+            setMlvUseIgvDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::AMaZE:
+            setMlvAlwaysUseAmaze( m_pMlvObject );
+            break;
+        case ReceiptSettings::AHD:
+            setMlvUseAhdDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::RCD:
+            setMlvUseRcdDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::DCB:
+            setMlvUseDcbDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_FAST:
+            setMlvUseGpuFastDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA:
+            setMlvUseGpuCinemaDebayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA_V2:
+            setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+            break;
+        default:
+            setMlvAlwaysUseAmaze( m_pMlvObject );
+            break;
+        }
+    }
     llrpResetFpmStatus(m_pMlvObject);
     llrpResetBpmStatus(m_pMlvObject);
     llrpComputeStripesOn(m_pMlvObject);
@@ -3245,6 +3371,8 @@ void MainWindow::startExportCdng(QString fileName)
 
     free( m_pExportedFramesArray );
     m_pExportedFramesArray = NULL;
+
+    restorePreviewDebayer();
 
     //Emit Ready-Signal
     emit exportReady();
@@ -3679,7 +3807,7 @@ void MainWindow::startExportAVFoundation(QString fileName)
     }
 
     //If we don't like amaze we switch it off again
-    if( !ui->actionAlwaysUseAMaZE->isChecked() ) { setMlvDontAlwaysUseAmaze( m_pMlvObject ); }
+    restorePreviewDebayer();
 
     //Enable GUI drawing
     m_dontDraw = false;

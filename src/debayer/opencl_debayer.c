@@ -582,6 +582,10 @@ static int execute_postprocess(
     float y_r = params->rgb_to_Y[0];
     float y_g = params->rgb_to_Y[1];
     float y_b = params->rgb_to_Y[2];
+    float d0 = params->wb_mult[0];
+    float d4 = params->wb_mult[1];
+    float d8 = params->wb_mult[2];
+    int agx = params->agx;
 
     cl_SetKernelArg(s_k_postprocess, 0, sizeof(cl_mem), &s_buf_rgb);
     cl_SetKernelArg(s_k_postprocess, 1, sizeof(cl_mem), &out8);
@@ -589,12 +593,16 @@ static int execute_postprocess(
     cl_SetKernelArg(s_k_postprocess, 3, sizeof(int), &width);
     cl_SetKernelArg(s_k_postprocess, 4, sizeof(int), &height);
     cl_SetKernelArg(s_k_postprocess, 5, sizeof(cl_mem), &s_buf_matrix);
-    cl_SetKernelArg(s_k_postprocess, 6, sizeof(cl_mem), &s_buf_levels_lut);
-    cl_SetKernelArg(s_k_postprocess, 7, sizeof(cl_mem), &s_buf_gamma_lut);
-    cl_SetKernelArg(s_k_postprocess, 8, sizeof(float), &params->sharpen_strength);
-    cl_SetKernelArg(s_k_postprocess, 9, sizeof(float), &y_r);
-    cl_SetKernelArg(s_k_postprocess, 10, sizeof(float), &y_g);
-    cl_SetKernelArg(s_k_postprocess, 11, sizeof(float), &y_b);
+    cl_SetKernelArg(s_k_postprocess, 6, sizeof(float), &d0);
+    cl_SetKernelArg(s_k_postprocess, 7, sizeof(float), &d4);
+    cl_SetKernelArg(s_k_postprocess, 8, sizeof(float), &d8);
+    cl_SetKernelArg(s_k_postprocess, 9, sizeof(cl_mem), &s_buf_levels_lut);
+    cl_SetKernelArg(s_k_postprocess, 10, sizeof(cl_mem), &s_buf_gamma_lut);
+    cl_SetKernelArg(s_k_postprocess, 11, sizeof(float), &params->sharpen_strength);
+    cl_SetKernelArg(s_k_postprocess, 12, sizeof(float), &y_r);
+    cl_SetKernelArg(s_k_postprocess, 13, sizeof(float), &y_g);
+    cl_SetKernelArg(s_k_postprocess, 14, sizeof(float), &y_b);
+    cl_SetKernelArg(s_k_postprocess, 15, sizeof(int), &agx);
 
     size_t global_ws[2] = { ((size_t)width + 15) / 16 * 16, ((size_t)height + 15) / 16 * 16 };
     size_t local_ws[2]  = { 16, 16 };

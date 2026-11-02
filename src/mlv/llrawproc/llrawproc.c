@@ -23,6 +23,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
+
+static pthread_mutex_t s_llrawproc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #include "llrawproc.h"
 #include "pixelproc.h"
@@ -191,18 +194,27 @@ llrawprocObject_t * initLLRawProcObject()
 
 void freeLLRawProcObject(mlvObject_t * video)
 {
+    if (!video || !video->llrawproc) return;
+    pthread_mutex_lock(&s_llrawproc_mutex);
     df_free_filename(video);
     df_free(video);
     free_luts(video->llrawproc->raw2ev, video->llrawproc->ev2raw);
     free_pixel_maps(&(video->llrawproc->focus_pixel_map), &(video->llrawproc->bad_pixel_map));
     free(video->llrawproc);
+    video->llrawproc = NULL;
+    pthread_mutex_unlock(&s_llrawproc_mutex);
 }
 
 /* all low level raw processing takes place here */
 void applyLLRawProcObject(mlvObject_t * video, uint16_t * raw_image_buff, size_t raw_image_size)
 {
+    if (!video || !raw_image_buff) return;
+    pthread_mutex_lock(&s_llrawproc_mutex);
     /* if 'fix_raw == false' skip raw processing alltogether */
-    if(!video->llrawproc->fix_raw) return;
+    if(!video->llrawproc || !video->llrawproc->fix_raw) {
+        pthread_mutex_unlock(&s_llrawproc_mutex);
+        return;
+    }
 
     /* subtract dark frame if Ext or Int mode specified and df_init is successful */
     if (!df_init(video))
@@ -481,6 +493,7 @@ void applyLLRawProcObject(mlvObject_t * video, uint16_t * raw_image_buff, size_t
 #ifndef STDOUT_SILENT
     printf("raw_image_buff[1000] = %u, Proc_Black = %d, Proc_White = %d, Raw_Black = %d, Raw_White = %d <= THE END OF LLRAWPROC\n", raw_image_buff[1000], video->processing->black_level, video->processing->white_level, video->RAWI.raw_info.black_level, video->RAWI.raw_info.white_level);
 #endif
+    pthread_mutex_unlock(&s_llrawproc_mutex);
 }
 
 /* Detect focus dot fix mode according to RAWC block info (binning + skipping) and camera ID

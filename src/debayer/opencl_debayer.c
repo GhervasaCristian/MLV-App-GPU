@@ -873,9 +873,6 @@ static int execute_postprocess(
         if (err != CL_SUCCESS) return 0;
     }
 
-    cl_mem out8 = output_8bit ? s_buf_rgb8 : NULL;
-    cl_mem out16 = output_8bit ? NULL : s_buf_rgb_processed;
-
     float y_r = params->rgb_to_Y[0];
     float y_g = params->rgb_to_Y[1];
     float y_b = params->rgb_to_Y[2];
@@ -885,8 +882,8 @@ static int execute_postprocess(
     int agx = params->agx;
 
     cl_SetKernelArg(s_k_postprocess, 0, sizeof(cl_mem), &s_buf_rgb);
-    cl_SetKernelArg(s_k_postprocess, 1, sizeof(cl_mem), &out8);
-    cl_SetKernelArg(s_k_postprocess, 2, sizeof(cl_mem), &out16);
+    cl_SetKernelArg(s_k_postprocess, 1, sizeof(cl_mem), &s_buf_rgb8);
+    cl_SetKernelArg(s_k_postprocess, 2, sizeof(cl_mem), &s_buf_rgb_processed);
     cl_SetKernelArg(s_k_postprocess, 3, sizeof(int), &width);
     cl_SetKernelArg(s_k_postprocess, 4, sizeof(int), &height);
     cl_SetKernelArg(s_k_postprocess, 5, sizeof(cl_mem), &s_buf_matrix);
@@ -900,6 +897,7 @@ static int execute_postprocess(
     cl_SetKernelArg(s_k_postprocess, 13, sizeof(float), &y_g);
     cl_SetKernelArg(s_k_postprocess, 14, sizeof(float), &y_b);
     cl_SetKernelArg(s_k_postprocess, 15, sizeof(int), &agx);
+    cl_SetKernelArg(s_k_postprocess, 16, sizeof(int), &output_8bit);
 
     size_t global_ws[2] = { ((size_t)width + 15) / 16 * 16, ((size_t)height + 15) / 16 * 16 };
     size_t local_ws[2]  = { 16, 16 };

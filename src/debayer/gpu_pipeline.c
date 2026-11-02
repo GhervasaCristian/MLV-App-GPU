@@ -9,7 +9,7 @@
 #include <math.h>
 #include <pthread.h>
 
-#define RING_SIZE 4
+#define RING_SIZE 16
 
 typedef struct {
     uint16_t *buffer;
@@ -112,6 +112,13 @@ static void* prefetch_worker_func(void* arg) {
 
         /* Load raw frame and apply LLRawProc with file I/O lock */
         pthread_mutex_lock(&s_io_mutex);
+        pthread_mutex_lock(&s_ring_mutex);
+        int valid_task = (s_worker_running && s_active_video == video && s_ring[slot].video == video && s_ring[slot].frame_index == target);
+        pthread_mutex_unlock(&s_ring_mutex);
+        if (!valid_task) {
+            pthread_mutex_unlock(&s_io_mutex);
+            continue;
+        }
         int ok = (getMlvRawFrameUint16(video, target, dest) == 0);
         if (ok && video->llrawproc) {
             int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
@@ -165,12 +172,14 @@ void gpu_pipeline_trigger_prefetch(mlvObject_t *video, uint64_t next_frame_index
     if (s_prefetch_next < next_frame_index) {
         s_prefetch_next = next_frame_index;
     }
-    pthread_cond_signal(&s_ring_cond);
+    pthread_cond_broadcast(&s_ring_cond);
     pthread_mutex_unlock(&s_ring_mutex);
 }
 
 void gpu_pipeline_flush_cache(void) {
     pthread_mutex_lock(&s_ring_mutex);
+    s_active_video = NULL;
+    s_prefetch_next = 0;
     for (int i = 0; i < RING_SIZE; i++) {
         s_ring[i].ready = 0;
         s_ring[i].video = NULL;
@@ -178,6 +187,10 @@ void gpu_pipeline_flush_cache(void) {
     }
     pthread_cond_broadcast(&s_ring_cond);
     pthread_mutex_unlock(&s_ring_mutex);
+
+    /* Wait for any active file I/O or raw processing on old video to finish */
+    pthread_mutex_lock(&s_io_mutex);
+    pthread_mutex_unlock(&s_io_mutex);
 }
 
 int gpu_pipeline_init(void) {
@@ -265,16 +278,36 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
 
     /* Check if target frame is already in ring buffer */
     for (int i = 0; i < RING_SIZE; i++) {
-        if (s_ring[i].video == video && s_ring[i].frame_index == frame_index && s_ring[i].ready && s_ring[i].is_preview == is_preview && s_ring[i].dual_iso == cur_diso) {
-            memcpy(raw_frame, s_ring[i].buffer, raw_size);
-            s_ring[i].ready = 0; /* Consumed */
-
-            if (s_prefetch_next <= frame_index) {
-                s_prefetch_next = frame_index + 1;
+        if (s_ring[i].video == video && s_ring[i].frame_index == frame_index && s_ring[i].is_preview == is_preview && s_ring[i].dual_iso == cur_diso) {
+            /* If worker is currently decoding this exact frame, wait for it */
+            if (!s_ring[i].ready) {
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_nsec += 60000000; /* 60ms timeout */
+                if (ts.tv_nsec >= 1000000000) {
+                    ts.tv_sec += 1;
+                    ts.tv_nsec -= 1000000000;
+                }
+                while (!s_ring[i].ready && s_ring[i].video == video && s_ring[i].frame_index == frame_index && s_worker_running) {
+                    if (pthread_cond_timedwait(&s_ring_cond, &s_ring_mutex, &ts) != 0) {
+                        break;
+                    }
+                }
             }
-            pthread_cond_signal(&s_ring_cond);
-            pthread_mutex_unlock(&s_ring_mutex);
-            return 1; /* Cache hit! */
+
+            if (s_ring[i].ready && s_ring[i].video == video && s_ring[i].frame_index == frame_index) {
+                memcpy(raw_frame, s_ring[i].buffer, raw_size);
+                s_ring[i].ready = 0; /* Consumed */
+                s_ring[i].video = NULL;
+
+                if (s_prefetch_next <= frame_index) {
+                    s_prefetch_next = frame_index + 1;
+                }
+                pthread_cond_broadcast(&s_ring_cond);
+                pthread_mutex_unlock(&s_ring_mutex);
+                return 1; /* Cache hit! */
+            }
+            break;
         }
     }
 
@@ -282,10 +315,11 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
     for (int i = 0; i < RING_SIZE; i++) {
         if (s_ring[i].video != video || s_ring[i].frame_index <= frame_index) {
             s_ring[i].ready = 0;
+            s_ring[i].video = NULL;
         }
     }
     s_prefetch_next = frame_index + 1;
-    pthread_cond_signal(&s_ring_cond);
+    pthread_cond_broadcast(&s_ring_cond);
     pthread_mutex_unlock(&s_ring_mutex);
 
     /* Synchronous read for current frame with file I/O lock */
@@ -325,6 +359,9 @@ int gpu_pipeline_process_frame_8(
     if (!video || !output_rgb8) return 0;
     if (!gpu_pipeline_is_available()) return 0;
 
+    static pthread_mutex_t s_proc8_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&s_proc8_mutex);
+
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
     size_t npix = (size_t)width * height;
@@ -337,9 +374,13 @@ int gpu_pipeline_process_frame_8(
         s_raw_cache = (uint16_t*)malloc(raw_size);
         s_raw_alloc = s_raw_cache ? raw_size : 0;
     }
-    if (!s_raw_cache) return 0;
+    if (!s_raw_cache) {
+        pthread_mutex_unlock(&s_proc8_mutex);
+        return 0;
+    }
 
     if (!load_raw_frame(video, frame_index, s_raw_cache, raw_size, 1)) {
+        pthread_mutex_unlock(&s_proc8_mutex);
         return 0;
     }
 
@@ -415,6 +456,7 @@ int gpu_pipeline_process_frame_8(
         &post
     );
 
+    pthread_mutex_unlock(&s_proc8_mutex);
     return ok;
 }
 
@@ -426,6 +468,9 @@ int gpu_pipeline_process_frame(
 ) {
     if (!video || !output_rgb16) return 0;
     if (!gpu_pipeline_is_available()) return 0;
+
+    static pthread_mutex_t s_proc16_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&s_proc16_mutex);
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
@@ -439,9 +484,13 @@ int gpu_pipeline_process_frame(
         s_raw_cache_16 = (uint16_t*)malloc(raw_size);
         s_raw_alloc_16 = s_raw_cache_16 ? raw_size : 0;
     }
-    if (!s_raw_cache_16) return 0;
+    if (!s_raw_cache_16) {
+        pthread_mutex_unlock(&s_proc16_mutex);
+        return 0;
+    }
 
     if (!load_raw_frame(video, frame_index, s_raw_cache_16, raw_size, 0)) {
+        pthread_mutex_unlock(&s_proc16_mutex);
         return 0;
     }
 
@@ -502,7 +551,7 @@ int gpu_pipeline_process_frame(
     int is_bright_16[4] = {1, 1, 0, 0};
     int white_darkened_16 = white;
 
-    return opencl_process_full_frame(
+    int ok = opencl_process_full_frame(
         output_rgb16,
         NULL,
         s_raw_cache_16,
@@ -516,6 +565,8 @@ int gpu_pipeline_process_frame(
         algo,
         &post
     );
+    pthread_mutex_unlock(&s_proc16_mutex);
+    return ok;
 }
 
 int gpu_pipeline_dualiso_to_bayer(

@@ -153,10 +153,12 @@ public:
     bool isHeightLocked(void);
     uint8_t smoothSetting(void);
     bool hdrBlending(void);
+    QString gpuDeviceName(void);
 
 private slots:
     void on_pushButtonClose_clicked();
     void on_comboBoxCodec_currentIndexChanged(int index);
+    void on_comboBoxGpuDevice_currentIndexChanged(int index);
     void on_checkBoxFpsOverride_toggled(bool checked);
     void on_checkBoxResize_toggled(bool checked);
     void on_comboBoxOption_currentTextChanged(const QString &arg1);

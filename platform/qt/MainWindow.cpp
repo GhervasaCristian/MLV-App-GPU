@@ -1608,6 +1608,8 @@ void MainWindow::readSettings()
     m_lastDarkframeFileName = set.value( "lastDarkframeFileName", QDir::homePath() ).toString();
     m_externalApplicationName = set.value( "externalAppName", QString( "" ) ).toString();
     m_lastLutFileName = set.value( "lastLutFile", QDir::homePath() ).toString();
+    m_gpuDeviceName = set.value( "gpuDeviceName", "Auto" ).toString();
+    gpu_pipeline_set_selected_device_by_name( m_gpuDeviceName.toUtf8().constData() );
     m_codecProfile = set.value( "codecProfile", 4 ).toUInt();
     m_codecOption = set.value( "codecOption", 0 ).toUInt();
     m_exportDebayerMode = set.value( "exportDebayerMode", 7 ).toUInt();
@@ -1705,6 +1707,7 @@ void MainWindow::writeSettings()
     set.setValue( "lastDarkframeFileName", m_lastDarkframeFileName );
     set.setValue( "externalAppName", m_externalApplicationName );
     set.setValue( "lastLutFile", m_lastLutFileName );
+    set.setValue( "gpuDeviceName", m_gpuDeviceName );
     set.setValue( "codecProfile", m_codecProfile );
     set.setValue( "codecOption", m_codecOption );
     set.setValue( "exportDebayerMode", m_exportDebayerMode );
@@ -7974,6 +7977,11 @@ void MainWindow::on_actionCaching_triggered()
     llrpResetFpmStatus(m_pMlvObject);
     llrpResetBpmStatus(m_pMlvObject);
     llrpComputeStripesOn(m_pMlvObject);
+    const char *dev = gpu_pipeline_device_name();
+    if( dev && dev[0] != '\0' )
+    {
+        m_pChosenDebayer->setToolTip( tr( "Debayer: %1\nDevice: %2" ).arg( m_pChosenDebayer->text() ).arg( dev ) );
+    }
     m_frameChanged = true;
 }
 
@@ -8017,7 +8025,17 @@ void MainWindow::on_actionExportSettings_triggered()
     m_resizeFilterHeightLocked = pExportSettings->isHeightLocked();
     m_smoothFilterSetting = pExportSettings->smoothSetting();
     m_hdrExport = pExportSettings->hdrBlending();
+    QString newGpu = pExportSettings->gpuDeviceName();
     delete pExportSettings;
+
+    if( newGpu != m_gpuDeviceName )
+    {
+        m_gpuDeviceName = newGpu;
+        gpu_pipeline_set_selected_device_by_name( m_gpuDeviceName.toUtf8().constData() );
+        selectDebayerAlgorithm();
+        m_frameChanged = true;
+        drawFrame();
+    }
 
     if( m_fileLoaded )
     {
@@ -11478,6 +11496,11 @@ void MainWindow::selectDebayerAlgorithm()
     llrpResetFpmStatus(m_pMlvObject);
     llrpResetBpmStatus(m_pMlvObject);
     llrpComputeStripesOn(m_pMlvObject);
+    const char *dev = gpu_pipeline_device_name();
+    if( dev && dev[0] != '\0' )
+    {
+        m_pChosenDebayer->setToolTip( tr( "Debayer: %1\nDevice: %2" ).arg( m_pChosenDebayer->text() ).arg( dev ) );
+    }
     m_frameChanged = true;
 }
 

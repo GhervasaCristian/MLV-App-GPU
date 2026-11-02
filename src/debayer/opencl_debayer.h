@@ -23,10 +23,27 @@ typedef struct {
     int agx;                     /* AgX mode flag */
 } gpu_postprocess_params_t;
 
+#define MAX_GPU_DEVICES 16
+
+typedef struct {
+    char name[128];
+    char vendor[128];
+    char platform_name[128];
+    int is_discrete;
+} gpu_device_entry_t;
+
 int opencl_debayer_init(void);
 void opencl_debayer_free(void);
 int opencl_debayer_is_available(void);
 const char* opencl_debayer_get_device_name(void);
+
+/* Device enumeration and selection */
+int opencl_debayer_get_device_count(void);
+int opencl_debayer_get_device_info(int index, gpu_device_entry_t *info);
+int opencl_debayer_get_selected_device(void);
+int opencl_debayer_get_active_device_index(void);
+int opencl_debayer_set_selected_device(int index);
+int opencl_debayer_set_selected_device_by_name(const char *name);
 
 /* Standalone GPU debayer */
 int opencl_debayer_process(

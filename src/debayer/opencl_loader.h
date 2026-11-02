@@ -33,6 +33,9 @@ typedef uint32_t cl_bool;
 #define CL_DEVICE_TYPE_GPU                          (1 << 2)
 #define CL_DEVICE_TYPE_ALL                          0xFFFFFFFF
 
+#define CL_PLATFORM_NAME                            0x0902
+#define CL_CONTEXT_PLATFORM                         0x1084
+
 #define CL_DEVICE_NAME                              0x102B
 #define CL_DEVICE_VENDOR                            0x102C
 #define CL_DEVICE_TYPE                              0x1000

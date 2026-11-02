@@ -358,6 +358,20 @@
           </property>
          </widget>
         </item>
+        <item row="3" column="0">
+         <widget class="QLabel" name="labelGpuDevice">
+          <property name="text">
+           <string>GPU Device</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="1">
+         <widget class="QComboBox" name="comboBoxGpuDevice">
+          <property name="toolTip">
+           <string>Select GPU device for rendering, playback, and export</string>
+          </property>
+         </widget>
+        </item>
        </layout>
       </item>
       <item>

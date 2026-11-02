@@ -7,6 +7,7 @@
 
 #include "ExportSettingsDialog.h"
 #include "ui_ExportSettingsDialog.h"
+#include "../../src/debayer/gpu_pipeline.h"
 #include <QMessageBox>
 #include <QStandardItemModel>
 #include <QStandardItem>
@@ -101,6 +102,39 @@ ExportSettingsDialog::ExportSettingsDialog(QWidget *parent, Scripting *scripting
     ui->toolButtonLockHeight->setChecked( heightLocked );
     ui->comboBoxSmoothing->setCurrentIndex( smooth );
     ui->checkBoxHdrBlending->setChecked( hdrBlending );
+
+    // GPU Device selection
+    ui->comboBoxGpuDevice->blockSignals( true );
+    ui->comboBoxGpuDevice->clear();
+    ui->comboBoxGpuDevice->addItem( tr( "Auto (Recommended)" ), QString( "Auto" ) );
+
+    int devCount = gpu_pipeline_get_device_count();
+    for( int i = 0; i < devCount; i++ )
+    {
+        gpu_device_entry_t info;
+        if( gpu_pipeline_get_device_info( i, &info ) )
+        {
+            QString devLabel = QString( "%1 (%2)" ).arg( info.name ).arg( info.platform_name );
+            if( info.is_discrete )
+            {
+                devLabel += tr( " [Discrete]" );
+            }
+            ui->comboBoxGpuDevice->addItem( devLabel, QString::fromUtf8( info.name ) );
+        }
+    }
+
+    QSettings setGpu( QSettings::UserScope, "magiclantern.MLVApp", "MLVApp" );
+    QString currentGpu = setGpu.value( "gpuDeviceName", "Auto" ).toString();
+    int selIdx = ui->comboBoxGpuDevice->findData( currentGpu );
+    if( selIdx >= 0 )
+    {
+        ui->comboBoxGpuDevice->setCurrentIndex( selIdx );
+    }
+    else
+    {
+        ui->comboBoxGpuDevice->setCurrentIndex( 0 );
+    }
+    ui->comboBoxGpuDevice->blockSignals( false );
 
     //Disable some options for AVFoundation
     if( ui->comboBoxOption->currentText() == QString( "Apple AVFoundation" ) )
@@ -694,4 +728,19 @@ void ExportSettingsDialog::on_listWidget_currentItemChanged(QListWidgetItem *cur
     }
     if( current == previous ) return;
     on_listWidget_itemClicked( current );
+}
+
+// Change GPU device
+void ExportSettingsDialog::on_comboBoxGpuDevice_currentIndexChanged(int index)
+{
+    if( index < 0 ) return;
+    QString devName = ui->comboBoxGpuDevice->itemData( index ).toString();
+    QSettings set( QSettings::UserScope, "magiclantern.MLVApp", "MLVApp" );
+    set.setValue( "gpuDeviceName", devName );
+    gpu_pipeline_set_selected_device_by_name( devName.toUtf8().constData() );
+}
+
+QString ExportSettingsDialog::gpuDeviceName(void)
+{
+    return ui->comboBoxGpuDevice->currentData().toString();
 }

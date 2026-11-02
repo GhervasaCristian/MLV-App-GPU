@@ -484,6 +484,7 @@ private:
     bool m_zoomModeChanged;
     bool m_playbackStopped;
     bool m_inClipDeleteProcess;
+    QString m_gpuDeviceName;
     QString m_lastExportPath;
     QString m_lastSessionFileName;
     QString m_lastMlvOpenFileName;

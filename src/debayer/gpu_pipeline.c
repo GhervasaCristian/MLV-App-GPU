@@ -199,6 +199,40 @@ const char* gpu_pipeline_device_name(void) {
     return opencl_debayer_get_device_name();
 }
 
+int gpu_pipeline_get_device_count(void) {
+    return opencl_debayer_get_device_count();
+}
+
+int gpu_pipeline_get_device_info(int index, gpu_device_entry_t *info) {
+    return opencl_debayer_get_device_info(index, info);
+}
+
+int gpu_pipeline_get_selected_device(void) {
+    return opencl_debayer_get_selected_device();
+}
+
+int gpu_pipeline_get_active_device_index(void) {
+    return opencl_debayer_get_active_device_index();
+}
+
+int gpu_pipeline_set_selected_device(int index) {
+    gpu_pipeline_free();
+    int ok = opencl_debayer_set_selected_device(index);
+    if (ok) {
+        gpu_pipeline_init();
+    }
+    return ok;
+}
+
+int gpu_pipeline_set_selected_device_by_name(const char *name) {
+    gpu_pipeline_free();
+    int ok = opencl_debayer_set_selected_device_by_name(name);
+    if (ok) {
+        gpu_pipeline_init();
+    }
+    return ok;
+}
+
 /* Internal helper: loads frame using prefetch cache when available */
 static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *raw_frame, size_t raw_size, int is_preview) {
     if (!video || !raw_frame) return 0;

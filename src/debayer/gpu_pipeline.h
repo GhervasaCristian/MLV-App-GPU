@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "../mlv/mlv_object.h"
+#include "opencl_debayer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +18,14 @@ int gpu_pipeline_init(void);
 void gpu_pipeline_free(void);
 int gpu_pipeline_is_available(void);
 const char* gpu_pipeline_device_name(void);
+
+/* Device enumeration and selection */
+int gpu_pipeline_get_device_count(void);
+int gpu_pipeline_get_device_info(int index, gpu_device_entry_t *info);
+int gpu_pipeline_get_selected_device(void);
+int gpu_pipeline_get_active_device_index(void);
+int gpu_pipeline_set_selected_device(int index);
+int gpu_pipeline_set_selected_device_by_name(const char *name);
 
 /* Process a raw frame through GPU Dual ISO, GPU Debayer, and GPU Post-Processing to 16-bit RGB.
  * Returns 1 on success, 0 on failure (for fail-proof CPU fallback). */

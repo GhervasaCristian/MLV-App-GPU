@@ -16,6 +16,21 @@ static int s_ocl_initialized = 0;
 static int s_ocl_available = 0;
 static char s_device_name[128] = "None";
 
+typedef struct {
+    cl_platform_id platform;
+    cl_device_id device;
+    char name[128];
+    char vendor[128];
+    char platform_name[128];
+    int is_discrete;
+} ocl_device_entry_internal_t;
+
+static ocl_device_entry_internal_t s_device_entries[MAX_GPU_DEVICES];
+static int s_device_count = 0;
+static int s_devices_enumerated = 0;
+static int s_selected_device_index = -1; /* -1: Auto, >= 0: specific device */
+static int s_active_device_index = -1;
+
 static cl_context s_ctx = NULL;
 static cl_command_queue s_queue = NULL;
 
@@ -146,6 +161,93 @@ static cl_program build_program(cl_context ctx, cl_device_id dev, const char* sr
     return prog;
 }
 
+static void enumerate_devices_locked(void) {
+    if (s_devices_enumerated) return;
+    s_device_count = 0;
+
+    if (!ocl_load_library()) {
+        s_devices_enumerated = 1;
+        return;
+    }
+
+    cl_uint num_platforms = 0;
+    cl_int err = cl_GetPlatformIDs(0, NULL, &num_platforms);
+    if (err != CL_SUCCESS || num_platforms == 0) {
+        s_devices_enumerated = 1;
+        return;
+    }
+
+    cl_platform_id* platforms = (cl_platform_id*)malloc(num_platforms * sizeof(cl_platform_id));
+    if (!platforms) {
+        s_devices_enumerated = 1;
+        return;
+    }
+    cl_GetPlatformIDs(num_platforms, platforms, NULL);
+
+    for (cl_uint p = 0; p < num_platforms; p++) {
+        char plat_name[128] = {0};
+        if (cl_GetPlatformInfo) {
+            cl_GetPlatformInfo(platforms[p], CL_PLATFORM_NAME, sizeof(plat_name), plat_name, NULL);
+        }
+
+        cl_uint num_dev = 0;
+        err = cl_GetDeviceIDs(platforms[p], CL_DEVICE_TYPE_GPU, 0, NULL, &num_dev);
+        if (err != CL_SUCCESS || num_dev == 0) {
+            err = cl_GetDeviceIDs(platforms[p], CL_DEVICE_TYPE_ALL, 0, NULL, &num_dev);
+        }
+
+        if (err == CL_SUCCESS && num_dev > 0) {
+            cl_device_id* devs = (cl_device_id*)malloc(num_dev * sizeof(cl_device_id));
+            if (devs) {
+                cl_GetDeviceIDs(platforms[p], CL_DEVICE_TYPE_ALL, num_dev, devs, NULL);
+                for (cl_uint d = 0; d < num_dev; d++) {
+                    if (s_device_count < MAX_GPU_DEVICES) {
+                        ocl_device_entry_internal_t *entry = &s_device_entries[s_device_count];
+                        memset(entry, 0, sizeof(*entry));
+                        entry->platform = platforms[p];
+                        entry->device = devs[d];
+                        strncpy(entry->platform_name, plat_name, sizeof(entry->platform_name) - 1);
+                        cl_GetDeviceInfo(devs[d], CL_DEVICE_NAME, sizeof(entry->name), entry->name, NULL);
+                        cl_GetDeviceInfo(devs[d], CL_DEVICE_VENDOR, sizeof(entry->vendor), entry->vendor, NULL);
+
+                        /* Clean up trailing whitespace */
+                        size_t l = strlen(entry->name);
+                        while (l > 0 && (entry->name[l-1] == ' ' || entry->name[l-1] == '\t' || entry->name[l-1] == '\r' || entry->name[l-1] == '\n')) {
+                            entry->name[--l] = '\0';
+                        }
+                        l = strlen(entry->vendor);
+                        while (l > 0 && (entry->vendor[l-1] == ' ' || entry->vendor[l-1] == '\t' || entry->vendor[l-1] == '\r' || entry->vendor[l-1] == '\n')) {
+                            entry->vendor[--l] = '\0';
+                        }
+
+                        int is_discrete = (strstr(entry->vendor, "NVIDIA") != NULL ||
+                                           strstr(entry->vendor, "AMD") != NULL ||
+                                           strstr(entry->vendor, "ATI") != NULL ||
+                                           strstr(entry->name, "RTX") != NULL ||
+                                           strstr(entry->name, "GTX") != NULL ||
+                                           strstr(entry->name, "Radeon RX") != NULL ||
+                                           strstr(entry->name, "Radeon Pro") != NULL ||
+                                           strstr(entry->name, "Arc") != NULL);
+                        if (strstr(entry->name, "UHD Graphics") != NULL ||
+                            strstr(entry->name, "HD Graphics") != NULL ||
+                            strstr(entry->name, "Iris") != NULL ||
+                            strstr(entry->name, "Radeon(TM) Graphics") != NULL ||
+                            strstr(entry->name, "Radeon 780M") != NULL ||
+                            strstr(entry->name, "Radeon 680M") != NULL) {
+                            is_discrete = 0;
+                        }
+                        entry->is_discrete = is_discrete;
+                        s_device_count++;
+                    }
+                }
+                free(devs);
+            }
+        }
+    }
+    free(platforms);
+    s_devices_enumerated = 1;
+}
+
 int opencl_debayer_init(void) {
     pthread_mutex_lock(&s_ocl_mutex);
     if (s_ocl_initialized) {
@@ -155,56 +257,45 @@ int opencl_debayer_init(void) {
     }
     s_ocl_initialized = 1;
 
-    if (!ocl_load_library()) {
+    enumerate_devices_locked();
+    if (s_device_count == 0) {
         pthread_mutex_unlock(&s_ocl_mutex);
         return 0;
     }
 
-    cl_uint num_platforms = 0;
-    cl_int err = cl_GetPlatformIDs(0, NULL, &num_platforms);
-    if (err != CL_SUCCESS || num_platforms == 0) {
-        pthread_mutex_unlock(&s_ocl_mutex);
-        return 0;
-    }
-
-    cl_platform_id* platforms = (cl_platform_id*)malloc(num_platforms * sizeof(cl_platform_id));
-    cl_GetPlatformIDs(num_platforms, platforms, NULL);
-
-    cl_device_id selected_device = NULL;
-    /* Pass 0: Discrete GPU (NVIDIA/AMD), Pass 1: Any GPU */
-    for (int pass = 0; pass < 2 && !selected_device; pass++) {
-        for (cl_uint p = 0; p < num_platforms; p++) {
-            cl_uint num_devices = 0;
-            err = cl_GetDeviceIDs(platforms[p], CL_DEVICE_TYPE_GPU, 0, NULL, &num_devices);
-            if (err == CL_SUCCESS && num_devices > 0) {
-                cl_device_id* devices = (cl_device_id*)malloc(num_devices * sizeof(cl_device_id));
-                cl_GetDeviceIDs(platforms[p], CL_DEVICE_TYPE_GPU, num_devices, devices, NULL);
-                for (cl_uint d = 0; d < num_devices; d++) {
-                    char vendor[128] = {0};
-                    cl_GetDeviceInfo(devices[d], CL_DEVICE_VENDOR, sizeof(vendor), vendor, NULL);
-                    int is_discrete = (strstr(vendor, "NVIDIA") != NULL || strstr(vendor, "AMD") != NULL || strstr(vendor, "ATI") != NULL);
-                    if ((pass == 0 && is_discrete) || (pass == 1 && !selected_device)) {
-                        selected_device = devices[d];
-                        cl_GetDeviceInfo(selected_device, CL_DEVICE_NAME, sizeof(s_device_name), s_device_name, NULL);
-                        break;
-                    }
-                }
-                free(devices);
-                if (selected_device) break;
+    int chosen_idx = -1;
+    if (s_selected_device_index >= 0 && s_selected_device_index < s_device_count) {
+        chosen_idx = s_selected_device_index;
+    } else {
+        /* Auto mode: Prefer discrete GPU, fallback to first GPU */
+        for (int i = 0; i < s_device_count; i++) {
+            if (s_device_entries[i].is_discrete) {
+                chosen_idx = i;
+                break;
             }
         }
-    }
-    free(platforms);
-
-    if (!selected_device) {
-        pthread_mutex_unlock(&s_ocl_mutex);
-        return 0;
+        if (chosen_idx < 0) chosen_idx = 0;
     }
 
-    s_ctx = cl_CreateContext(NULL, 1, &selected_device, NULL, NULL, &err);
+    s_active_device_index = chosen_idx;
+    cl_platform_id selected_platform = s_device_entries[chosen_idx].platform;
+    cl_device_id selected_device = s_device_entries[chosen_idx].device;
+    strncpy(s_device_name, s_device_entries[chosen_idx].name, sizeof(s_device_name) - 1);
+    s_device_name[sizeof(s_device_name) - 1] = '\0';
+
+    cl_int err = CL_SUCCESS;
+    intptr_t props[] = {
+        CL_CONTEXT_PLATFORM,
+        (intptr_t)selected_platform,
+        0
+    };
+    s_ctx = cl_CreateContext(props, 1, &selected_device, NULL, NULL, &err);
     if (err != CL_SUCCESS || !s_ctx) {
-        pthread_mutex_unlock(&s_ocl_mutex);
-        return 0;
+        s_ctx = cl_CreateContext(NULL, 1, &selected_device, NULL, NULL, &err);
+        if (err != CL_SUCCESS || !s_ctx) {
+            pthread_mutex_unlock(&s_ocl_mutex);
+            return 0;
+        }
     }
 
     s_queue = cl_CreateCommandQueue(s_ctx, selected_device, 0, &err);
@@ -307,6 +398,7 @@ void opencl_debayer_free(void) {
 
     s_ocl_available = 0;
     s_ocl_initialized = 0;
+    s_active_device_index = -1;
     strcpy(s_device_name, "None");
     pthread_mutex_unlock(&s_ocl_mutex);
 }
@@ -318,6 +410,92 @@ int opencl_debayer_is_available(void) {
 
 const char* opencl_debayer_get_device_name(void) {
     return s_device_name;
+}
+
+int opencl_debayer_get_device_count(void) {
+    pthread_mutex_lock(&s_ocl_mutex);
+    enumerate_devices_locked();
+    int count = s_device_count;
+    pthread_mutex_unlock(&s_ocl_mutex);
+    return count;
+}
+
+int opencl_debayer_get_device_info(int index, gpu_device_entry_t *info) {
+    if (!info) return 0;
+    pthread_mutex_lock(&s_ocl_mutex);
+    enumerate_devices_locked();
+    if (index < 0 || index >= s_device_count) {
+        pthread_mutex_unlock(&s_ocl_mutex);
+        return 0;
+    }
+    strncpy(info->name, s_device_entries[index].name, sizeof(info->name) - 1);
+    info->name[sizeof(info->name) - 1] = '\0';
+    strncpy(info->vendor, s_device_entries[index].vendor, sizeof(info->vendor) - 1);
+    info->vendor[sizeof(info->vendor) - 1] = '\0';
+    strncpy(info->platform_name, s_device_entries[index].platform_name, sizeof(info->platform_name) - 1);
+    info->platform_name[sizeof(info->platform_name) - 1] = '\0';
+    info->is_discrete = s_device_entries[index].is_discrete;
+    pthread_mutex_unlock(&s_ocl_mutex);
+    return 1;
+}
+
+int opencl_debayer_get_selected_device(void) {
+    pthread_mutex_lock(&s_ocl_mutex);
+    int sel = s_selected_device_index;
+    pthread_mutex_unlock(&s_ocl_mutex);
+    return sel;
+}
+
+int opencl_debayer_get_active_device_index(void) {
+    pthread_mutex_lock(&s_ocl_mutex);
+    int active = s_active_device_index;
+    pthread_mutex_unlock(&s_ocl_mutex);
+    return active;
+}
+
+int opencl_debayer_set_selected_device(int index) {
+    pthread_mutex_lock(&s_ocl_mutex);
+    enumerate_devices_locked();
+    if (index >= s_device_count) {
+        pthread_mutex_unlock(&s_ocl_mutex);
+        return 0;
+    }
+    if (index < -1) index = -1;
+
+    int changed = (s_selected_device_index != index);
+    s_selected_device_index = index;
+    int was_init = s_ocl_initialized;
+    pthread_mutex_unlock(&s_ocl_mutex);
+
+    if (was_init && changed) {
+        opencl_debayer_free();
+        return opencl_debayer_init();
+    }
+    return 1;
+}
+
+int opencl_debayer_set_selected_device_by_name(const char *name) {
+    pthread_mutex_lock(&s_ocl_mutex);
+    enumerate_devices_locked();
+    int target_idx = -1;
+    if (name && strlen(name) > 0 && strcmp(name, "Auto") != 0 && strcmp(name, "auto") != 0) {
+        for (int i = 0; i < s_device_count; i++) {
+            if (strcmp(s_device_entries[i].name, name) == 0 || strstr(s_device_entries[i].name, name) != NULL) {
+                target_idx = i;
+                break;
+            }
+        }
+    }
+    int changed = (s_selected_device_index != target_idx);
+    s_selected_device_index = target_idx;
+    int was_init = s_ocl_initialized;
+    pthread_mutex_unlock(&s_ocl_mutex);
+
+    if (was_init && changed) {
+        opencl_debayer_free();
+        return opencl_debayer_init();
+    }
+    return 1;
 }
 
 /* Internal: Execute debayer on cl_mem bayer_buf */

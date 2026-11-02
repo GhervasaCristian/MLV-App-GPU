@@ -1040,6 +1040,14 @@ int MainWindow::openMlv( QString fileName )
     {
         setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
     }
+    else if( ui->actionUseGpuCinemaV3Debayer->isChecked() )
+    {
+        setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+    }
+    else if( ui->actionUseGpuCinemaV3Debayer->isChecked() )
+    {
+        setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+    }
     else if( ui->actionUseIgvDebayer->isChecked() )
     {
         setMlvUseIgvDebayer( m_pMlvObject );
@@ -1227,6 +1235,7 @@ void MainWindow::initGui( void )
     m_previewDebayerGroup->addAction( ui->actionUseGpuLmmseDebayer );
     m_previewDebayerGroup->addAction( ui->actionUseGpuCinemaDebayer );
     m_previewDebayerGroup->addAction( ui->actionUseGpuCinemaV2Debayer );
+    m_previewDebayerGroup->addAction( ui->actionUseGpuCinemaV3Debayer );
     m_previewDebayerGroup->addAction( ui->actionAlwaysUseAMaZE );
     m_previewDebayerGroup->addAction( ui->actionCaching );
     m_previewDebayerGroup->addAction( ui->actionDontSwitchDebayerForPlayback );
@@ -1614,7 +1623,7 @@ void MainWindow::readSettings()
     gpu_pipeline_set_selected_device_by_name( m_gpuDeviceName.toUtf8().constData() );
     m_codecProfile = set.value( "codecProfile", 4 ).toUInt();
     m_codecOption = set.value( "codecOption", 0 ).toUInt();
-    m_exportDebayerMode = set.value( "exportDebayerMode", 7 ).toUInt();
+    m_exportDebayerMode = set.value( "exportDebayerMode", 8 ).toUInt();
     m_previewMode = set.value( "previewMode", 1 ).toUInt();
     switch( m_previewMode )
     {
@@ -1823,7 +1832,11 @@ void MainWindow::startExportPipe(QString fileName)
     }
     else if( m_exportDebayerMode == 1 )
     {
-        if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V2 )
+        if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V3 )
+        {
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+        }
+        else if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V2 )
         {
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
         }
@@ -1859,6 +1872,18 @@ void MainWindow::startExportPipe(QString fileName)
     else if( m_exportDebayerMode == 6 )
     {
         setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 7 )
+    {
+        setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 7 )
+    {
+        setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+    }
+    else if( m_exportDebayerMode == 7 )
+    {
+        setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
     }
     else
     {
@@ -1899,6 +1924,9 @@ void MainWindow::startExportPipe(QString fileName)
             break;
         case ReceiptSettings::GPU_CINEMA_V2:
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA_V3:
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
             break;
         default:
             break;
@@ -2988,7 +3016,11 @@ void MainWindow::startExportCdng(QString fileName)
     }
     else if( m_exportDebayerMode == 1 )
     {
-        if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V2 )
+        if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V3 )
+        {
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+        }
+        else if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V2 )
         {
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
         }
@@ -3064,6 +3096,9 @@ void MainWindow::startExportCdng(QString fileName)
             break;
         case ReceiptSettings::GPU_CINEMA_V2:
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA_V3:
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
             break;
         default:
             setMlvAlwaysUseAmaze( m_pMlvObject );
@@ -3518,7 +3553,11 @@ void MainWindow::startExportAVFoundation(QString fileName)
     }
     else if( m_exportDebayerMode == 1 )
     {
-        if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V2 )
+        if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V3 )
+        {
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+        }
+        else if( m_exportQueue.first()->debayer() == ReceiptSettings::GPU_CINEMA_V2 )
         {
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
         }
@@ -3594,6 +3633,9 @@ void MainWindow::startExportAVFoundation(QString fileName)
             break;
         case ReceiptSettings::GPU_CINEMA_V2:
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
+            break;
+        case ReceiptSettings::GPU_CINEMA_V3:
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
             break;
         default:
             break;
@@ -7933,6 +7975,13 @@ void MainWindow::on_actionUseGpuCinemaV2Debayer_triggered()
     return;
 }
 
+void MainWindow::on_actionUseGpuCinemaV3Debayer_triggered()
+{
+    ui->comboBoxDebayer->setCurrentIndex( ReceiptSettings::GPU_CINEMA_V3 );
+    selectDebayerAlgorithm();
+    return;
+}
+
 //Use IGV debayer
 void MainWindow::on_actionUseIgvDebayer_triggered()
 {
@@ -11326,6 +11375,7 @@ void MainWindow::on_comboBoxDebayer_currentIndexChanged(int index)
     if( index == ReceiptSettings::GPU_FAST ) ui->actionUseGpuLmmseDebayer->setChecked( true );
     else if( index == ReceiptSettings::GPU_CINEMA ) ui->actionUseGpuCinemaDebayer->setChecked( true );
     else if( index == ReceiptSettings::GPU_CINEMA_V2 ) ui->actionUseGpuCinemaV2Debayer->setChecked( true );
+    else if( index == ReceiptSettings::GPU_CINEMA_V3 ) ui->actionUseGpuCinemaV3Debayer->setChecked( true );
     else if( index == ReceiptSettings::AMaZE ) ui->actionAlwaysUseAMaZE->setChecked( true );
     else if( index == ReceiptSettings::Bilinear ) ui->actionUseBilinear->setChecked( true );
     else if( index == ReceiptSettings::LMMSE ) ui->actionUseLmmseDebayer->setChecked( true );
@@ -11346,15 +11396,22 @@ void MainWindow::selectDebayerAlgorithm()
 
     bool isGpuReceipt = (ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_FAST ||
                          ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_CINEMA ||
-                         ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_CINEMA_V2);
+                         ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_CINEMA_V2 ||
+                         ui->comboBoxDebayer->currentIndex() == ReceiptSettings::GPU_CINEMA_V3);
 
     bool isGpuAction = (ui->actionUseGpuLmmseDebayer->isChecked() ||
                         ui->actionUseGpuCinemaDebayer->isChecked() ||
-                        ui->actionUseGpuCinemaV2Debayer->isChecked());
+                        ui->actionUseGpuCinemaV2Debayer->isChecked() ||
+                        ui->actionUseGpuCinemaV3Debayer->isChecked());
 
     if( isGpuAction )
     {
-        if( ui->actionUseGpuCinemaV2Debayer->isChecked() )
+        if( ui->actionUseGpuCinemaV3Debayer->isChecked() )
+        {
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+            m_pChosenDebayer->setText( tr( "GPU Cinema (RCDv3)" ) );
+        }
+        else if( ui->actionUseGpuCinemaV2Debayer->isChecked() )
         {
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
             m_pChosenDebayer->setText( tr( "GPU Cinema (RCDv2)" ) );
@@ -11412,6 +11469,9 @@ void MainWindow::selectDebayerAlgorithm()
         case ReceiptSettings::GPU_CINEMA_V2:
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
             break;
+        case ReceiptSettings::GPU_CINEMA_V3:
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+            break;
         default:
             break;
         }
@@ -11462,6 +11522,12 @@ void MainWindow::selectDebayerAlgorithm()
             setMlvUseGpuCinemaV2Debayer( m_pMlvObject );
             disableMlvCaching( m_pMlvObject );
             m_pChosenDebayer->setText( tr( "GPU Cinema (RCDv2)" ) );
+        }
+        else if( ui->actionUseGpuCinemaV3Debayer->isChecked() )
+        {
+            setMlvUseGpuCinemaV3Debayer( m_pMlvObject );
+            disableMlvCaching( m_pMlvObject );
+            m_pChosenDebayer->setText( tr( "GPU Cinema (RCDv3)" ) );
         }
         else if( ui->actionUseIgvDebayer->isChecked() )
         {

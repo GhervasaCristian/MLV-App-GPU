@@ -10,7 +10,8 @@ extern "C" {
 enum {
     GPU_DEBAYER_FAST = 0,       /* Fast Single Pass - ultra fast playback */
     GPU_DEBAYER_CINEMA = 1,     /* RCD v1 (3-pass with median) */
-    GPU_DEBAYER_CINEMA_V2 = 2   /* RCD v2 (RawTherapee v2.3 ratio-corrected, zero red fringe) */
+    GPU_DEBAYER_CINEMA_V2 = 2,  /* RCD v2 (RawTherapee v2.3 ratio-corrected, zero red fringe) */
+    GPU_DEBAYER_CINEMA_V3 = 3   /* RCD v3 (Ultra Cinema 6-pass guided bilateral anti-moiré) */
 };
 
 typedef struct {

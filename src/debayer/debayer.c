@@ -452,3 +452,8 @@ int debayerGpuRcdV2(uint16_t * __restrict debayerto, const uint16_t * __restrict
 {
     return opencl_debayer_process(debayerto, bayerdata, width, height, black, white, cfa_pattern, GPU_DEBAYER_CINEMA_V2);
 }
+
+int debayerGpuRcdV3(uint16_t * __restrict debayerto, const uint16_t * __restrict bayerdata, int width, int height, int black, int white, int cfa_pattern)
+{
+    return opencl_debayer_process(debayerto, bayerdata, width, height, black, white, cfa_pattern, GPU_DEBAYER_CINEMA_V3);
+}

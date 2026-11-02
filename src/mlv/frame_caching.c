@@ -310,7 +310,7 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
             saved_chroma_smooth = video->llrawproc->chroma_smooth;
             video->llrawproc->diso_averaging = 1; /* mean23: ultra-fast 3ms for playback */
             video->llrawproc->chroma_smooth = 0;
-        } else if (debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2) {
+        } else if (debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2 || debayer_type == DEBAYER_GPU_CINEMA_V3) {
             if (video->llrawproc->diso_averaging == 0) { /* If AMaZE (which bottlenecks at 1,019 ms) */
                 saved_diso_averaging = video->llrawproc->diso_averaging;
                 video->llrawproc->diso_averaging = 2; /* RCD Dual ISO: 4.5ms, identical sharpness */
@@ -356,11 +356,12 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     }
 
     /* Debayer */
-    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2)
+    if (debayer_type == DEBAYER_GPU_FAST || debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2 || debayer_type == DEBAYER_GPU_CINEMA_V3)
     {
         int algo = 10;
         if (debayer_type == DEBAYER_GPU_CINEMA) algo = 11;
         else if (debayer_type == DEBAYER_GPU_CINEMA_V2) algo = 12;
+        else if (debayer_type == DEBAYER_GPU_CINEMA_V3) algo = 13;
         int black = getMlvBlackLevel(video);
         int white = getMlvWhiteLevel(video);
         static uint16_t *s_bayer16_cache = NULL;

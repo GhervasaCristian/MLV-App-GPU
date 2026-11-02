@@ -13,6 +13,7 @@ extern "C" {
 #define GPU_ALGO_FAST       0   /* Multi-Gradient (Hamilton-Adams) - Real-time Playback */
 #define GPU_ALGO_CINEMA     1   /* RCD v1 (3-pass with median) */
 #define GPU_ALGO_CINEMA_V2  2   /* RCD v2 (RawTherapee v2.3 ratio-corrected, zero red fringe) */
+#define GPU_ALGO_CINEMA_V3  3   /* RCD v3 (Ultra Cinema 6-pass guided bilateral anti-moiré) */
 
 int gpu_pipeline_init(void);
 void gpu_pipeline_free(void);

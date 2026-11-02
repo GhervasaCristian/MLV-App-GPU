@@ -3,6 +3,7 @@
 #include "opencl_multigradient_kernels.h"
 #include "opencl_rcd_kernels.h"
 #include "opencl_rcdv2_kernels.h"
+#include "opencl_rcdv3_kernels.h"
 #include "opencl_dualiso_kernels.h"
 #include "opencl_postprocess_kernels.h"
 
@@ -51,6 +52,14 @@ static cl_kernel s_k_rcdv2_step2 = NULL;
 static cl_kernel s_k_rcdv2_step3 = NULL;
 static cl_kernel s_k_rcdv2_step4 = NULL;
 
+static cl_program s_prog_rcdv3 = NULL;
+static cl_kernel s_k_rcdv3_step1 = NULL;
+static cl_kernel s_k_rcdv3_step2 = NULL;
+static cl_kernel s_k_rcdv3_step3 = NULL;
+static cl_kernel s_k_rcdv3_step4 = NULL;
+static cl_kernel s_k_rcdv3_step5 = NULL;
+static cl_kernel s_k_rcdv3_step6 = NULL;
+
 static cl_program s_prog_diso = NULL;
 static cl_kernel s_k_diso_interp = NULL;
 static cl_kernel s_k_diso_fusion = NULL;
@@ -63,8 +72,11 @@ static cl_mem s_buf_bayer_fused = NULL;
 static cl_mem s_buf_lpf = NULL;
 static cl_mem s_buf_green = NULL;
 static cl_mem s_buf_vh_dir = NULL;
+static cl_mem s_buf_diag_dir = NULL;
 static cl_mem s_buf_diff_r = NULL;
 static cl_mem s_buf_diff_b = NULL;
+static cl_mem s_buf_diff_r2 = NULL;
+static cl_mem s_buf_diff_b2 = NULL;
 static cl_mem s_buf_diso_dark = NULL;
 static cl_mem s_buf_diso_bright = NULL;
 static cl_mem s_buf_rgb = NULL;
@@ -87,8 +99,11 @@ static int ensure_buffers(int width, int height) {
     if (s_buf_lpf) { cl_ReleaseMemObject(s_buf_lpf); s_buf_lpf = NULL; }
     if (s_buf_green) { cl_ReleaseMemObject(s_buf_green); s_buf_green = NULL; }
     if (s_buf_vh_dir) { cl_ReleaseMemObject(s_buf_vh_dir); s_buf_vh_dir = NULL; }
+    if (s_buf_diag_dir) { cl_ReleaseMemObject(s_buf_diag_dir); s_buf_diag_dir = NULL; }
     if (s_buf_diff_r) { cl_ReleaseMemObject(s_buf_diff_r); s_buf_diff_r = NULL; }
     if (s_buf_diff_b) { cl_ReleaseMemObject(s_buf_diff_b); s_buf_diff_b = NULL; }
+    if (s_buf_diff_r2) { cl_ReleaseMemObject(s_buf_diff_r2); s_buf_diff_r2 = NULL; }
+    if (s_buf_diff_b2) { cl_ReleaseMemObject(s_buf_diff_b2); s_buf_diff_b2 = NULL; }
     if (s_buf_diso_dark) { cl_ReleaseMemObject(s_buf_diso_dark); s_buf_diso_dark = NULL; }
     if (s_buf_diso_bright) { cl_ReleaseMemObject(s_buf_diso_bright); s_buf_diso_bright = NULL; }
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
@@ -116,10 +131,19 @@ static int ensure_buffers(int width, int height) {
     s_buf_vh_dir = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
     if (err != CL_SUCCESS) return 0;
 
+    s_buf_diag_dir = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
+    if (err != CL_SUCCESS) return 0;
+
     s_buf_diff_r = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
     if (err != CL_SUCCESS) return 0;
 
     s_buf_diff_b = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
+    if (err != CL_SUCCESS) return 0;
+
+    s_buf_diff_r2 = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
+    if (err != CL_SUCCESS) return 0;
+
+    s_buf_diff_b2 = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(float), NULL, &err);
     if (err != CL_SUCCESS) return 0;
 
     s_buf_diso_dark = cl_CreateBuffer(s_ctx, CL_MEM_READ_WRITE, num_pixels * sizeof(uint16_t), NULL, &err);
@@ -329,6 +353,17 @@ int opencl_debayer_init(void) {
         s_k_rcdv2_step4 = cl_CreateKernel(s_prog_rcdv2, "k_rcdv2_step4_synthesis", &err);
     }
 
+    /* Build RCD v3 (Ultra Cinema) program */
+    s_prog_rcdv3 = build_program(s_ctx, selected_device, s_rcdv3_kernel_src);
+    if (s_prog_rcdv3) {
+        s_k_rcdv3_step1 = cl_CreateKernel(s_prog_rcdv3, "k_rcdv3_step1_lpf_directions", &err);
+        s_k_rcdv3_step2 = cl_CreateKernel(s_prog_rcdv3, "k_rcdv3_step2_green", &err);
+        s_k_rcdv3_step3 = cl_CreateKernel(s_prog_rcdv3, "k_rcdv3_step3_chroma_diag", &err);
+        s_k_rcdv3_step4 = cl_CreateKernel(s_prog_rcdv3, "k_rcdv3_step4_chroma_full", &err);
+        s_k_rcdv3_step5 = cl_CreateKernel(s_prog_rcdv3, "k_rcdv3_step5_bilateral_refine", &err);
+        s_k_rcdv3_step6 = cl_CreateKernel(s_prog_rcdv3, "k_rcdv3_step6_synthesis", &err);
+    }
+
     /* Build Dual ISO program */
     s_prog_diso = build_program(s_ctx, selected_device, s_dualiso_kernel_src);
     if (s_prog_diso) {
@@ -340,7 +375,7 @@ int opencl_debayer_init(void) {
         s_k_postprocess = cl_CreateKernel(s_prog_post, "k_postprocess_frame", &err);
     }
 
-    if (!s_k_mg_fast || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_rcdv2_step1 || !s_k_rcdv2_step2 || !s_k_rcdv2_step3 || !s_k_rcdv2_step4 || !s_k_diso_interp || !s_k_diso_fusion) {
+    if (!s_k_mg_fast || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_rcdv2_step1 || !s_k_rcdv2_step2 || !s_k_rcdv2_step3 || !s_k_rcdv2_step4 || !s_k_rcdv3_step1 || !s_k_rcdv3_step2 || !s_k_rcdv3_step3 || !s_k_rcdv3_step4 || !s_k_rcdv3_step5 || !s_k_rcdv3_step6 || !s_k_diso_interp || !s_k_diso_fusion) {
         pthread_mutex_unlock(&s_ocl_mutex);
         opencl_debayer_free();
         return 0;
@@ -361,8 +396,11 @@ void opencl_debayer_free(void) {
     if (s_buf_lpf) { cl_ReleaseMemObject(s_buf_lpf); s_buf_lpf = NULL; }
     if (s_buf_green) { cl_ReleaseMemObject(s_buf_green); s_buf_green = NULL; }
     if (s_buf_vh_dir) { cl_ReleaseMemObject(s_buf_vh_dir); s_buf_vh_dir = NULL; }
+    if (s_buf_diag_dir) { cl_ReleaseMemObject(s_buf_diag_dir); s_buf_diag_dir = NULL; }
     if (s_buf_diff_r) { cl_ReleaseMemObject(s_buf_diff_r); s_buf_diff_r = NULL; }
     if (s_buf_diff_b) { cl_ReleaseMemObject(s_buf_diff_b); s_buf_diff_b = NULL; }
+    if (s_buf_diff_r2) { cl_ReleaseMemObject(s_buf_diff_r2); s_buf_diff_r2 = NULL; }
+    if (s_buf_diff_b2) { cl_ReleaseMemObject(s_buf_diff_b2); s_buf_diff_b2 = NULL; }
     if (s_buf_diso_dark) { cl_ReleaseMemObject(s_buf_diso_dark); s_buf_diso_dark = NULL; }
     if (s_buf_diso_bright) { cl_ReleaseMemObject(s_buf_diso_bright); s_buf_diso_bright = NULL; }
     if (s_buf_rgb) { cl_ReleaseMemObject(s_buf_rgb); s_buf_rgb = NULL; }
@@ -386,6 +424,14 @@ void opencl_debayer_free(void) {
     if (s_k_rcdv2_step3) { cl_ReleaseKernel(s_k_rcdv2_step3); s_k_rcdv2_step3 = NULL; }
     if (s_k_rcdv2_step4) { cl_ReleaseKernel(s_k_rcdv2_step4); s_k_rcdv2_step4 = NULL; }
     if (s_prog_rcdv2) { cl_ReleaseProgram(s_prog_rcdv2); s_prog_rcdv2 = NULL; }
+
+    if (s_k_rcdv3_step1) { cl_ReleaseKernel(s_k_rcdv3_step1); s_k_rcdv3_step1 = NULL; }
+    if (s_k_rcdv3_step2) { cl_ReleaseKernel(s_k_rcdv3_step2); s_k_rcdv3_step2 = NULL; }
+    if (s_k_rcdv3_step3) { cl_ReleaseKernel(s_k_rcdv3_step3); s_k_rcdv3_step3 = NULL; }
+    if (s_k_rcdv3_step4) { cl_ReleaseKernel(s_k_rcdv3_step4); s_k_rcdv3_step4 = NULL; }
+    if (s_k_rcdv3_step5) { cl_ReleaseKernel(s_k_rcdv3_step5); s_k_rcdv3_step5 = NULL; }
+    if (s_k_rcdv3_step6) { cl_ReleaseKernel(s_k_rcdv3_step6); s_k_rcdv3_step6 = NULL; }
+    if (s_prog_rcdv3) { cl_ReleaseProgram(s_prog_rcdv3); s_prog_rcdv3 = NULL; }
 
     if (s_k_diso_interp) { cl_ReleaseKernel(s_k_diso_interp); s_k_diso_interp = NULL; }
     if (s_k_diso_fusion) { cl_ReleaseKernel(s_k_diso_fusion); s_k_diso_fusion = NULL; }
@@ -507,7 +553,80 @@ static int execute_debayer(cl_mem bayer_buf, int width, int height, int cfa_patt
     size_t local_ws[2] = { 16, 16 };
     cl_int err = CL_SUCCESS;
 
-    if ((algorithm == GPU_DEBAYER_CINEMA_V2 || algorithm == 12) && s_k_rcdv2_step1 && s_k_rcdv2_step2 && s_k_rcdv2_step3 && s_k_rcdv2_step4) {
+    if ((algorithm == GPU_DEBAYER_CINEMA_V3 || algorithm == 13) && s_k_rcdv3_step1 && s_k_rcdv3_step2 && s_k_rcdv3_step3 && s_k_rcdv3_step4 && s_k_rcdv3_step5 && s_k_rcdv3_step6) {
+        /* Pass 1: Multi-scale Directional Gradient & Texture Tensor Analysis */
+        cl_SetKernelArg(s_k_rcdv3_step1, 0, sizeof(cl_mem), &bayer_buf);
+        cl_SetKernelArg(s_k_rcdv3_step1, 1, sizeof(cl_mem), &s_buf_lpf);
+        cl_SetKernelArg(s_k_rcdv3_step1, 2, sizeof(cl_mem), &s_buf_vh_dir);
+        cl_SetKernelArg(s_k_rcdv3_step1, 3, sizeof(cl_mem), &s_buf_diag_dir);
+        cl_SetKernelArg(s_k_rcdv3_step1, 4, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcdv3_step1, 5, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcdv3_step1, 6, sizeof(int), &cfa_pattern);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv3_step1, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 2: Adaptive 8-Directional Green Channel Reconstruction */
+        cl_SetKernelArg(s_k_rcdv3_step2, 0, sizeof(cl_mem), &bayer_buf);
+        cl_SetKernelArg(s_k_rcdv3_step2, 1, sizeof(cl_mem), &s_buf_lpf);
+        cl_SetKernelArg(s_k_rcdv3_step2, 2, sizeof(cl_mem), &s_buf_vh_dir);
+        cl_SetKernelArg(s_k_rcdv3_step2, 3, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcdv3_step2, 4, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcdv3_step2, 5, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcdv3_step2, 6, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcdv3_step2, 7, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcdv3_step2, 8, sizeof(int), &cfa_pattern);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv3_step2, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 3: Cross-Channel Diagonal Chroma Reconstruction */
+        cl_SetKernelArg(s_k_rcdv3_step3, 0, sizeof(cl_mem), &bayer_buf);
+        cl_SetKernelArg(s_k_rcdv3_step3, 1, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcdv3_step3, 2, sizeof(cl_mem), &s_buf_diag_dir);
+        cl_SetKernelArg(s_k_rcdv3_step3, 3, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcdv3_step3, 4, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcdv3_step3, 5, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcdv3_step3, 6, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcdv3_step3, 7, sizeof(int), &cfa_pattern);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv3_step3, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 4: Cross-Channel Chroma Fill at Green Sites */
+        cl_SetKernelArg(s_k_rcdv3_step4, 0, sizeof(cl_mem), &s_buf_vh_dir);
+        cl_SetKernelArg(s_k_rcdv3_step4, 1, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcdv3_step4, 2, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcdv3_step4, 3, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcdv3_step4, 4, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcdv3_step4, 5, sizeof(int), &cfa_pattern);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv3_step4, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 5: Edge-Preserving Guided Bilateral Chroma Filter & Anti-Moiré Refinement */
+        cl_SetKernelArg(s_k_rcdv3_step5, 0, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcdv3_step5, 1, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcdv3_step5, 2, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcdv3_step5, 3, sizeof(cl_mem), &s_buf_diff_r2);
+        cl_SetKernelArg(s_k_rcdv3_step5, 4, sizeof(cl_mem), &s_buf_diff_b2);
+        cl_SetKernelArg(s_k_rcdv3_step5, 5, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcdv3_step5, 6, sizeof(int), &height);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv3_step5, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 6: Full 16-bit RGB Cinema Reconstruction & Fusion */
+        cl_SetKernelArg(s_k_rcdv3_step6, 0, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcdv3_step6, 1, sizeof(cl_mem), &s_buf_diff_r2);
+        cl_SetKernelArg(s_k_rcdv3_step6, 2, sizeof(cl_mem), &s_buf_diff_b2);
+        cl_SetKernelArg(s_k_rcdv3_step6, 3, sizeof(cl_mem), &s_buf_rgb);
+        cl_SetKernelArg(s_k_rcdv3_step6, 4, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcdv3_step6, 5, sizeof(int), &height);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv3_step6, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+    } else if ((algorithm == GPU_DEBAYER_CINEMA_V2 || algorithm == 12) && s_k_rcdv2_step1 && s_k_rcdv2_step2 && s_k_rcdv2_step3 && s_k_rcdv2_step4) {
         /* Pass 1: Multispectral LPF and VH Discrimination */
         cl_SetKernelArg(s_k_rcdv2_step1, 0, sizeof(cl_mem), &bayer_buf);
         cl_SetKernelArg(s_k_rcdv2_step1, 1, sizeof(cl_mem), &s_buf_lpf);

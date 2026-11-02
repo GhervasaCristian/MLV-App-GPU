@@ -110,6 +110,8 @@
 #define setMlvUseGpuCinemaDebayer(video) (video)->use_amaze = 11; (video)->current_cached_frame_active = 0
 /* Use the GPU Cinema (RCDv2) debayer */
 #define setMlvUseGpuCinemaV2Debayer(video) (video)->use_amaze = 12; (video)->current_cached_frame_active = 0
+/* Use the GPU Cinema (RCDv3) debayer */
+#define setMlvUseGpuCinemaV3Debayer(video) (video)->use_amaze = 13; (video)->current_cached_frame_active = 0
 #define setMlvUseGpuDebayer(video) setMlvUseGpuFastDebayer(video)
 #define setMlvUseGpuLmmseDebayer(video) setMlvUseGpuFastDebayer(video)
 

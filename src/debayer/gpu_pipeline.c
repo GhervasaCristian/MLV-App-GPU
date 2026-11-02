@@ -110,20 +110,14 @@ static void* prefetch_worker_func(void* arg) {
         int ok = (getMlvRawFrameUint16(video, target, dest) == 0);
         if (ok && video->llrawproc) {
             int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-            int saved_averaging = video->llrawproc->diso_averaging;
-            int saved_chroma = video->llrawproc->chroma_smooth;
-
-            if (is_dual_iso && is_prev) {
-                video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
-                video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 blur during playback */
+            int saved_diso = video->llrawproc->dual_iso;
+            if (is_dual_iso) {
+                video->llrawproc->dual_iso = 0; /* Bypass CPU diso_get_full20bit, execute fusion on GPU */
             }
 
             applyLLRawProcObject(video, dest, needed);
 
-            if (is_dual_iso && is_prev) {
-                video->llrawproc->diso_averaging = saved_averaging;
-                video->llrawproc->chroma_smooth = saved_chroma;
-            }
+            video->llrawproc->dual_iso = saved_diso;
         }
 
         pthread_mutex_lock(&s_ring_mutex);
@@ -274,20 +268,14 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
 
     if (video->llrawproc) {
         int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-        int saved_averaging = video->llrawproc->diso_averaging;
-        int saved_chroma = video->llrawproc->chroma_smooth;
-
-        if (is_dual_iso && is_preview) {
-            video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
-            video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 CPU blur during playback */
+        int saved_diso = video->llrawproc->dual_iso;
+        if (is_dual_iso) {
+            video->llrawproc->dual_iso = 0; /* Bypass CPU diso_get_full20bit, execute fusion on GPU */
         }
 
         applyLLRawProcObject(video, raw_frame, raw_size);
 
-        if (is_dual_iso && is_preview) {
-            video->llrawproc->diso_averaging = saved_averaging;
-            video->llrawproc->chroma_smooth = saved_chroma;
-        }
+        video->llrawproc->dual_iso = saved_diso;
     }
 
     return 1;
@@ -336,6 +324,7 @@ int gpu_pipeline_process_frame_8(
     int algo = GPU_DEBAYER_FAST;
     if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
     else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
+    else if (gpu_algorithm == GPU_ALGO_CINEMA_V3) algo = GPU_DEBAYER_CINEMA_V3;
 
     processingObject_t *p = video->processing;
     gpu_postprocess_params_t post;
@@ -369,7 +358,34 @@ int gpu_pipeline_process_frame_8(
     post.rgb_to_Y[2] = 0.07217500f;
     post.agx = p->AgX;
 
-    int is_bright[4] = {0, 0, 1, 1};
+    int is_dual_iso = 0;
+    float corr_ev = 0.0f;
+    float overlap = 3.0f;
+    int is_bright[4] = {1, 1, 0, 0};
+    int white_darkened = white;
+
+    if (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) {
+        is_dual_iso = 1;
+        int iso1 = video->llrawproc->diso1;
+        int iso2 = video->llrawproc->diso2;
+        int low_iso = (iso1 < iso2) ? iso1 : iso2;
+        int high_iso = (iso1 > iso2) ? iso1 : iso2;
+        if (low_iso > 0 && high_iso > 0) {
+            corr_ev = log2f((float)high_iso / (float)low_iso);
+            if (high_iso >= 6400 && corr_ev > 0.0f) corr_ev -= 1.0f;
+        }
+        if (video->llrawproc->diso_ev_correction < 0.0) {
+            corr_ev = (float)fabs(video->llrawproc->diso_ev_correction);
+        }
+        white_darkened = (int)((white - black) * powf(2.0f, -corr_ev) + black);
+
+        const int iso_patterns[4][4] = {{1, 1, 0, 0}, {1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 1, 0}};
+        int p_idx = video->llrawproc->diso_pattern;
+        if (p_idx > 0 && p_idx <= 4) {
+            memcpy(is_bright, iso_patterns[p_idx - 1], sizeof(is_bright));
+        }
+    }
+
     int ok = opencl_process_full_frame(
         NULL,
         output_rgb8,
@@ -378,9 +394,9 @@ int gpu_pipeline_process_frame_8(
         height,
         black,
         white,
-        white,
+        white_darkened,
         cfa,
-        0, 0.0f, 3.0f, is_bright,
+        is_dual_iso, corr_ev, overlap, is_bright,
         algo,
         &post
     );
@@ -431,6 +447,7 @@ int gpu_pipeline_process_frame(
     int algo = GPU_DEBAYER_FAST;
     if (gpu_algorithm == GPU_ALGO_CINEMA) algo = GPU_DEBAYER_CINEMA;
     else if (gpu_algorithm == GPU_ALGO_CINEMA_V2) algo = GPU_DEBAYER_CINEMA_V2;
+    else if (gpu_algorithm == GPU_ALGO_CINEMA_V3) algo = GPU_DEBAYER_CINEMA_V3;
 
     processingObject_t *p = video->processing;
     gpu_postprocess_params_t post;
@@ -464,7 +481,34 @@ int gpu_pipeline_process_frame(
     post.rgb_to_Y[2] = 0.07217500f;
     post.agx = p->AgX;
 
-    int is_bright[4] = {0, 0, 1, 1};
+    int is_dual_iso_16 = 0;
+    float corr_ev_16 = 0.0f;
+    float overlap_16 = 3.0f;
+    int is_bright_16[4] = {1, 1, 0, 0};
+    int white_darkened_16 = white;
+
+    if (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) {
+        is_dual_iso_16 = 1;
+        int iso1 = video->llrawproc->diso1;
+        int iso2 = video->llrawproc->diso2;
+        int low_iso = (iso1 < iso2) ? iso1 : iso2;
+        int high_iso = (iso1 > iso2) ? iso1 : iso2;
+        if (low_iso > 0 && high_iso > 0) {
+            corr_ev_16 = log2f((float)high_iso / (float)low_iso);
+            if (high_iso >= 6400 && corr_ev_16 > 0.0f) corr_ev_16 -= 1.0f;
+        }
+        if (video->llrawproc->diso_ev_correction < 0.0) {
+            corr_ev_16 = (float)fabs(video->llrawproc->diso_ev_correction);
+        }
+        white_darkened_16 = (int)((white - black) * powf(2.0f, -corr_ev_16) + black);
+
+        const int iso_patterns[4][4] = {{1, 1, 0, 0}, {1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 1, 0}};
+        int p_idx = video->llrawproc->diso_pattern;
+        if (p_idx > 0 && p_idx <= 4) {
+            memcpy(is_bright_16, iso_patterns[p_idx - 1], sizeof(is_bright_16));
+        }
+    }
+
     return opencl_process_full_frame(
         output_rgb16,
         NULL,
@@ -473,10 +517,87 @@ int gpu_pipeline_process_frame(
         height,
         black,
         white,
-        white,
+        white_darkened_16,
         cfa,
-        0, 0.0f, 3.0f, is_bright,
+        is_dual_iso_16, corr_ev_16, overlap_16, is_bright_16,
         algo,
         &post
+    );
+}
+
+int gpu_pipeline_dualiso_to_bayer(
+    mlvObject_t *video,
+    uint64_t frame_index,
+    uint16_t *bayer_fused_out
+) {
+    if (!video || !bayer_fused_out) return 0;
+    if (!gpu_pipeline_is_available()) return 0;
+
+    int width = getMlvWidth(video);
+    int height = getMlvHeight(video);
+    size_t npix = (size_t)width * height;
+    size_t raw_size = npix * sizeof(uint16_t);
+
+    static uint16_t *s_raw_cache_diso = NULL;
+    static size_t s_raw_alloc_diso = 0;
+    if (s_raw_alloc_diso < raw_size) {
+        free(s_raw_cache_diso);
+        s_raw_cache_diso = (uint16_t*)malloc(raw_size);
+        s_raw_alloc_diso = s_raw_cache_diso ? raw_size : 0;
+    }
+    if (!s_raw_cache_diso) return 0;
+
+    if (!load_raw_frame(video, frame_index, s_raw_cache_diso, raw_size, 0)) {
+        return 0;
+    }
+
+    int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
+    if (shift_val > 0) {
+        #pragma omp parallel for
+        for (size_t i = 0; i < npix; i++) {
+            s_raw_cache_diso[i] <<= shift_val;
+        }
+    }
+
+    int black = (llrpHQDualIso(video)) ? video->processing->black_level : (getMlvBlackLevel(video) << shift_val);
+    int white = (llrpHQDualIso(video)) ? video->processing->white_level : (getMlvWhiteLevel(video) << shift_val);
+
+    float corr_ev = 0.0f;
+    float overlap = 3.0f;
+    int is_bright[4] = {1, 1, 0, 0};
+    int white_darkened = white;
+
+    if (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) {
+        int iso1 = video->llrawproc->diso1;
+        int iso2 = video->llrawproc->diso2;
+        int low_iso = (iso1 < iso2) ? iso1 : iso2;
+        int high_iso = (iso1 > iso2) ? iso1 : iso2;
+        if (low_iso > 0 && high_iso > 0) {
+            corr_ev = log2f((float)high_iso / (float)low_iso);
+            if (high_iso >= 6400 && corr_ev > 0.0f) corr_ev -= 1.0f;
+        }
+        if (video->llrawproc->diso_ev_correction < 0.0) {
+            corr_ev = (float)fabs(video->llrawproc->diso_ev_correction);
+        }
+        white_darkened = (int)((white - black) * powf(2.0f, -corr_ev) + black);
+
+        const int iso_patterns[4][4] = {{1, 1, 0, 0}, {1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 1, 0}};
+        int p_idx = video->llrawproc->diso_pattern;
+        if (p_idx > 0 && p_idx <= 4) {
+            memcpy(is_bright, iso_patterns[p_idx - 1], sizeof(is_bright));
+        }
+    }
+
+    return opencl_dualiso_process(
+        bayer_fused_out,
+        s_raw_cache_diso,
+        width,
+        height,
+        black,
+        white,
+        white_darkened,
+        corr_ev,
+        overlap,
+        is_bright
     );
 }

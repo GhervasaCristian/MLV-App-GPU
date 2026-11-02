@@ -695,6 +695,7 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
         int algo = GPU_ALGO_FAST;
         if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
         else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
+        else if (doesMlvAlwaysUseAmaze(video) == 13) algo = GPU_ALGO_CINEMA_V3;
 
         if (gpu_pipeline_process_frame(video, frameIndex, outputFrame, algo))
         {
@@ -727,6 +728,7 @@ void getMlvProcessedFrame8(mlvObject_t * video, uint64_t frameIndex, uint8_t * o
         int algo = GPU_ALGO_FAST;
         if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
         else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
+        else if (doesMlvAlwaysUseAmaze(video) == 13) algo = GPU_ALGO_CINEMA_V3;
 
         if (gpu_pipeline_process_frame_8(video, frameIndex, outputFrame, algo))
         {

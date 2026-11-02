@@ -164,8 +164,8 @@ llrawprocObject_t * initLLRawProcObject()
     llrawproc->dual_iso = 0;
     llrawproc->diso_pattern = 0;
     llrawproc->diso_auto_correction = -1;
-    llrawproc->diso_ev_correction = 0;
-    llrawproc->diso_black_delta = 0;
+    llrawproc->diso_ev_correction = 1;
+    llrawproc->diso_black_delta = -1;
     llrawproc->diso_averaging = 0;
     llrawproc->diso_alias_map = 0;
     llrawproc->diso_frblending = 1;

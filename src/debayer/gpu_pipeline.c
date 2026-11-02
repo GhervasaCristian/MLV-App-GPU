@@ -17,12 +17,14 @@ typedef struct {
     uint64_t frame_index;
     mlvObject_t *video;
     int is_preview;
+    int dual_iso;
     volatile int ready; /* 0: empty/invalid, 1: ready */
 } ring_slot_t;
 
 static ring_slot_t s_ring[RING_SIZE];
 static pthread_mutex_t s_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  s_ring_cond  = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t s_io_mutex   = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t       s_worker_thread;
 static volatile int    s_worker_started = 0;
 static volatile int    s_worker_running = 1;
@@ -46,6 +48,7 @@ static void* prefetch_worker_func(void* arg) {
         mlvObject_t *video = s_active_video;
         uint64_t target = s_prefetch_next;
         int is_prev = s_prefetch_is_preview;
+        int cur_diso = (video && video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) ? 1 : 0;
         uint64_t total_frames = video ? getMlvFrames(video) : 0;
 
         if (!video || target >= total_frames) {
@@ -58,7 +61,7 @@ static void* prefetch_worker_func(void* arg) {
         /* Check if target frame is already in ring */
         int already_present = 0;
         for (int i = 0; i < RING_SIZE; i++) {
-            if (s_ring[i].video == video && s_ring[i].frame_index == target && s_ring[i].ready && s_ring[i].is_preview == is_prev) {
+            if (s_ring[i].video == video && s_ring[i].frame_index == target && s_ring[i].ready && s_ring[i].is_preview == is_prev && s_ring[i].dual_iso == cur_diso) {
                 already_present = 1;
                 break;
             }
@@ -89,6 +92,7 @@ static void* prefetch_worker_func(void* arg) {
         s_ring[slot].video = video;
         s_ring[slot].frame_index = target;
         s_ring[slot].is_preview = is_prev;
+        s_ring[slot].dual_iso = cur_diso;
         s_ring[slot].ready = 0;
 
         int width = getMlvWidth(video);
@@ -106,22 +110,33 @@ static void* prefetch_worker_func(void* arg) {
 
         if (!dest) continue;
 
-        /* Load raw frame without holding ring mutex */
+        /* Load raw frame and apply LLRawProc with file I/O lock */
+        pthread_mutex_lock(&s_io_mutex);
         int ok = (getMlvRawFrameUint16(video, target, dest) == 0);
         if (ok && video->llrawproc) {
             int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-            int saved_diso = video->llrawproc->dual_iso;
-            if (is_dual_iso) {
-                video->llrawproc->dual_iso = 0; /* Bypass CPU diso_get_full20bit, execute fusion on GPU */
+            int saved_averaging = video->llrawproc->diso_averaging;
+            int saved_chroma = video->llrawproc->chroma_smooth;
+            int saved_alias = video->llrawproc->diso_alias_map;
+
+            if (is_dual_iso && is_prev) {
+                video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
+                video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 blur during playback */
+                video->llrawproc->diso_alias_map = 0;
             }
 
             applyLLRawProcObject(video, dest, needed);
 
-            video->llrawproc->dual_iso = saved_diso;
+            if (is_dual_iso && is_prev) {
+                video->llrawproc->diso_averaging = saved_averaging;
+                video->llrawproc->chroma_smooth = saved_chroma;
+                video->llrawproc->diso_alias_map = saved_alias;
+            }
         }
+        pthread_mutex_unlock(&s_io_mutex);
 
         pthread_mutex_lock(&s_ring_mutex);
-        if (s_ring[slot].video == video && s_ring[slot].frame_index == target && s_ring[slot].is_preview == is_prev) {
+        if (s_ring[slot].video == video && s_ring[slot].frame_index == target && s_ring[slot].is_preview == is_prev && s_ring[slot].dual_iso == cur_diso) {
             s_ring[slot].ready = ok ? 1 : 0;
         }
         pthread_cond_broadcast(&s_ring_cond);
@@ -151,6 +166,17 @@ void gpu_pipeline_trigger_prefetch(mlvObject_t *video, uint64_t next_frame_index
         s_prefetch_next = next_frame_index;
     }
     pthread_cond_signal(&s_ring_cond);
+    pthread_mutex_unlock(&s_ring_mutex);
+}
+
+void gpu_pipeline_flush_cache(void) {
+    pthread_mutex_lock(&s_ring_mutex);
+    for (int i = 0; i < RING_SIZE; i++) {
+        s_ring[i].ready = 0;
+        s_ring[i].video = NULL;
+        s_ring[i].frame_index = (uint64_t)-1;
+    }
+    pthread_cond_broadcast(&s_ring_cond);
     pthread_mutex_unlock(&s_ring_mutex);
 }
 
@@ -235,10 +261,11 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
     pthread_mutex_lock(&s_ring_mutex);
     s_active_video = video;
     s_prefetch_is_preview = is_preview;
+    int cur_diso = (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) ? 1 : 0;
 
     /* Check if target frame is already in ring buffer */
     for (int i = 0; i < RING_SIZE; i++) {
-        if (s_ring[i].video == video && s_ring[i].frame_index == frame_index && s_ring[i].ready && s_ring[i].is_preview == is_preview) {
+        if (s_ring[i].video == video && s_ring[i].frame_index == frame_index && s_ring[i].ready && s_ring[i].is_preview == is_preview && s_ring[i].dual_iso == cur_diso) {
             memcpy(raw_frame, s_ring[i].buffer, raw_size);
             s_ring[i].ready = 0; /* Consumed */
 
@@ -261,24 +288,32 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
     pthread_cond_signal(&s_ring_cond);
     pthread_mutex_unlock(&s_ring_mutex);
 
-    /* Synchronous read for current frame */
-    if (getMlvRawFrameUint16(video, frame_index, raw_frame) != 0) {
-        return 0;
-    }
-
-    if (video->llrawproc) {
+    /* Synchronous read for current frame with file I/O lock */
+    pthread_mutex_lock(&s_io_mutex);
+    int ok = (getMlvRawFrameUint16(video, frame_index, raw_frame) == 0);
+    if (ok && video->llrawproc) {
         int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-        int saved_diso = video->llrawproc->dual_iso;
-        if (is_dual_iso) {
-            video->llrawproc->dual_iso = 0; /* Bypass CPU diso_get_full20bit, execute fusion on GPU */
+        int saved_averaging = video->llrawproc->diso_averaging;
+        int saved_chroma = video->llrawproc->chroma_smooth;
+        int saved_alias = video->llrawproc->diso_alias_map;
+
+        if (is_dual_iso && is_preview) {
+            video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
+            video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 CPU blur during playback */
+            video->llrawproc->diso_alias_map = 0;
         }
 
         applyLLRawProcObject(video, raw_frame, raw_size);
 
-        video->llrawproc->dual_iso = saved_diso;
+        if (is_dual_iso && is_preview) {
+            video->llrawproc->diso_averaging = saved_averaging;
+            video->llrawproc->chroma_smooth = saved_chroma;
+            video->llrawproc->diso_alias_map = saved_alias;
+        }
     }
+    pthread_mutex_unlock(&s_io_mutex);
 
-    return 1;
+    return ok;
 }
 
 int gpu_pipeline_process_frame_8(
@@ -358,33 +393,12 @@ int gpu_pipeline_process_frame_8(
     post.rgb_to_Y[2] = 0.07217500f;
     post.agx = p->AgX;
 
+    /* Dual ISO has already been fused into 16-bit Bayer by CPU applyLLRawProcObject */
     int is_dual_iso = 0;
     float corr_ev = 0.0f;
     float overlap = 3.0f;
     int is_bright[4] = {1, 1, 0, 0};
     int white_darkened = white;
-
-    if (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) {
-        is_dual_iso = 1;
-        int iso1 = video->llrawproc->diso1;
-        int iso2 = video->llrawproc->diso2;
-        int low_iso = (iso1 < iso2) ? iso1 : iso2;
-        int high_iso = (iso1 > iso2) ? iso1 : iso2;
-        if (low_iso > 0 && high_iso > 0) {
-            corr_ev = log2f((float)high_iso / (float)low_iso);
-            if (high_iso >= 6400 && corr_ev > 0.0f) corr_ev -= 1.0f;
-        }
-        if (video->llrawproc->diso_ev_correction < 0.0) {
-            corr_ev = (float)fabs(video->llrawproc->diso_ev_correction);
-        }
-        white_darkened = (int)((white - black) * powf(2.0f, -corr_ev) + black);
-
-        const int iso_patterns[4][4] = {{1, 1, 0, 0}, {1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 1, 0}};
-        int p_idx = video->llrawproc->diso_pattern;
-        if (p_idx > 0 && p_idx <= 4) {
-            memcpy(is_bright, iso_patterns[p_idx - 1], sizeof(is_bright));
-        }
-    }
 
     int ok = opencl_process_full_frame(
         NULL,
@@ -481,33 +495,12 @@ int gpu_pipeline_process_frame(
     post.rgb_to_Y[2] = 0.07217500f;
     post.agx = p->AgX;
 
+    /* Dual ISO has already been fused into 16-bit Bayer by CPU applyLLRawProcObject */
     int is_dual_iso_16 = 0;
     float corr_ev_16 = 0.0f;
     float overlap_16 = 3.0f;
     int is_bright_16[4] = {1, 1, 0, 0};
     int white_darkened_16 = white;
-
-    if (video->llrawproc && video->llrawproc->diso_validity && video->llrawproc->dual_iso) {
-        is_dual_iso_16 = 1;
-        int iso1 = video->llrawproc->diso1;
-        int iso2 = video->llrawproc->diso2;
-        int low_iso = (iso1 < iso2) ? iso1 : iso2;
-        int high_iso = (iso1 > iso2) ? iso1 : iso2;
-        if (low_iso > 0 && high_iso > 0) {
-            corr_ev_16 = log2f((float)high_iso / (float)low_iso);
-            if (high_iso >= 6400 && corr_ev_16 > 0.0f) corr_ev_16 -= 1.0f;
-        }
-        if (video->llrawproc->diso_ev_correction < 0.0) {
-            corr_ev_16 = (float)fabs(video->llrawproc->diso_ev_correction);
-        }
-        white_darkened_16 = (int)((white - black) * powf(2.0f, -corr_ev_16) + black);
-
-        const int iso_patterns[4][4] = {{1, 1, 0, 0}, {1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 1, 0}};
-        int p_idx = video->llrawproc->diso_pattern;
-        if (p_idx > 0 && p_idx <= 4) {
-            memcpy(is_bright_16, iso_patterns[p_idx - 1], sizeof(is_bright_16));
-        }
-    }
 
     return opencl_process_full_frame(
         output_rgb16,

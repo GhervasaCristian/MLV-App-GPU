@@ -27,6 +27,7 @@ void resetMlvCache(mlvObject_t * video)
 {
     resetMlvCachedFrame(video);
     mark_mlv_uncached(video);
+    gpu_pipeline_flush_cache();
 }
 
 void disableMlvCaching(mlvObject_t * video)
@@ -38,6 +39,7 @@ void disableMlvCaching(mlvObject_t * video)
     mark_mlv_uncached(video);
     free(video->cache_memory_block);
     video->cache_memory_block = malloc(2);
+    gpu_pipeline_flush_cache();
 }
 
 void enableMlvCaching(mlvObject_t * video)

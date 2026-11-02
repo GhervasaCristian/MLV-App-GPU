@@ -56,6 +56,9 @@ int gpu_pipeline_dualiso_to_bayer(
 /* Background asynchronous frame prefetching */
 void gpu_pipeline_trigger_prefetch(mlvObject_t *video, uint64_t next_frame_index);
 
+/* Flush ring buffer cache */
+void gpu_pipeline_flush_cache(void);
+
 #ifdef __cplusplus
 }
 #endif

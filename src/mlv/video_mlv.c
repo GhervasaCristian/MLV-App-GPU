@@ -850,6 +850,7 @@ mlvObject_t * initMlvObject()
 /* Free all memory and close file */
 void freeMlvObject(mlvObject_t * video)
 {
+    gpu_pipeline_flush_cache();
     isMlvActive(video) = 0;
 
     /* Stop caching and make sure using silly sleep trick */

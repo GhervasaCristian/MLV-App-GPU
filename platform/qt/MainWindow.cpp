@@ -604,6 +604,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 //Draw a raw picture to the gui -> start render thread
 void MainWindow::drawFrame( void )
 {
+    if( !m_fileLoaded || !m_pMlvObject ) return;
+
     m_frameStillDrawing = true;
 
     //enable low level raw fixes (if wanted)
@@ -8031,10 +8033,17 @@ void MainWindow::on_actionExportSettings_triggered()
     if( newGpu != m_gpuDeviceName )
     {
         m_gpuDeviceName = newGpu;
+        QSettings set( QSettings::UserScope, "magiclantern.MLVApp", "MLVApp" );
+        set.setValue( "gpuDeviceName", m_gpuDeviceName );
+
+        while( !m_pRenderThread->isIdle() ) QThread::msleep(1);
         gpu_pipeline_set_selected_device_by_name( m_gpuDeviceName.toUtf8().constData() );
         selectDebayerAlgorithm();
-        m_frameChanged = true;
-        drawFrame();
+        if( m_fileLoaded )
+        {
+            m_frameChanged = true;
+            drawFrame();
+        }
     }
 
     if( m_fileLoaded )

@@ -737,7 +737,6 @@ void ExportSettingsDialog::on_comboBoxGpuDevice_currentIndexChanged(int index)
     QString devName = ui->comboBoxGpuDevice->itemData( index ).toString();
     QSettings set( QSettings::UserScope, "magiclantern.MLVApp", "MLVApp" );
     set.setValue( "gpuDeviceName", devName );
-    gpu_pipeline_set_selected_device_by_name( devName.toUtf8().constData() );
 }
 
 QString ExportSettingsDialog::gpuDeviceName(void)

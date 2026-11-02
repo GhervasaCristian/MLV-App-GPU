@@ -341,8 +341,8 @@ int opencl_debayer_init(void) {
     }
 
     if (!s_k_mg_fast || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_rcdv2_step1 || !s_k_rcdv2_step2 || !s_k_rcdv2_step3 || !s_k_rcdv2_step4 || !s_k_diso_interp || !s_k_diso_fusion) {
-        opencl_debayer_free();
         pthread_mutex_unlock(&s_ocl_mutex);
+        opencl_debayer_free();
         return 0;
     }
 

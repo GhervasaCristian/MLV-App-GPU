@@ -15,6 +15,8 @@ RenderFrameThread::RenderFrameThread()
     m_initialized = false;
     m_renderFrame = false;
     m_frameReady = false;
+    m_pMlvObject = NULL;
+    m_pRawImage = NULL;
 }
 
 //Destructor
@@ -93,6 +95,8 @@ void RenderFrameThread::run(void)
 //render the picture
 void RenderFrameThread::drawFrame()
 {
+    if( !m_pMlvObject || !m_pRawImage ) return;
+
     //Get frame from library
     getMlvProcessedFrame8( m_pMlvObject, m_frameNumber, m_pRawImage, QThread::idealThreadCount() );
     emit frameReady();

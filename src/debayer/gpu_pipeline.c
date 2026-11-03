@@ -392,8 +392,8 @@ int gpu_pipeline_process_frame_8(
         }
     }
 
-    int black = (llrpHQDualIso(video)) ? video->processing->black_level : (getMlvBlackLevel(video) << shift_val);
-    int white = (llrpHQDualIso(video)) ? video->processing->white_level : (getMlvWhiteLevel(video) << shift_val);
+    int black = (llrpHQDualIso(video)) ? (video->processing ? video->processing->black_level : (getMlvBlackLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvBlackLevel(video) << shift_val);
+    int white = (llrpHQDualIso(video)) ? (video->processing ? video->processing->white_level : (getMlvWhiteLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvWhiteLevel(video) << shift_val);
     int cfa = video->RAWI.raw_info.cfa_pattern;
     if (!cfa) cfa = 0x02010100;
 
@@ -502,8 +502,8 @@ int gpu_pipeline_process_frame(
         }
     }
 
-    int black = (llrpHQDualIso(video)) ? video->processing->black_level : (getMlvBlackLevel(video) << shift_val);
-    int white = (llrpHQDualIso(video)) ? video->processing->white_level : (getMlvWhiteLevel(video) << shift_val);
+    int black = (llrpHQDualIso(video)) ? (video->processing ? video->processing->black_level : (getMlvBlackLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvBlackLevel(video) << shift_val);
+    int white = (llrpHQDualIso(video)) ? (video->processing ? video->processing->white_level : (getMlvWhiteLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvWhiteLevel(video) << shift_val);
     int cfa = video->RAWI.raw_info.cfa_pattern;
     if (!cfa) cfa = 0x02010100;
 
@@ -603,8 +603,8 @@ int gpu_pipeline_dualiso_to_bayer(
         }
     }
 
-    int black = (llrpHQDualIso(video)) ? video->processing->black_level : (getMlvBlackLevel(video) << shift_val);
-    int white = (llrpHQDualIso(video)) ? video->processing->white_level : (getMlvWhiteLevel(video) << shift_val);
+    int black = (llrpHQDualIso(video)) ? (video->processing ? video->processing->black_level : (getMlvBlackLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvBlackLevel(video) << shift_val);
+    int white = (llrpHQDualIso(video)) ? (video->processing ? video->processing->white_level : (getMlvWhiteLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvWhiteLevel(video) << shift_val);
 
     float corr_ev = 0.0f;
     float overlap = 3.0f;

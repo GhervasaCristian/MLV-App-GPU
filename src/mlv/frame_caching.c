@@ -335,7 +335,7 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     wb_convert_info_t wb_info;
 
     /* WB conversion for ideal debayer result, not for bilinear, easy and non debayer */
-    if( !( debayer_type == 0 || debayer_type == 2 || debayer_type == 3 ) )
+    if( !( debayer_type == 0 || debayer_type == 2 || debayer_type == 3 || debayer_type >= 10 ) )
     {
         wb_convert(&wb_info, temp_memory, width, height, getMlvBlackLevel(video));
 
@@ -417,6 +417,6 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
     }
 
     /* WB conversion undo for ideal debayer result */
-    if( !( debayer_type == 0 || debayer_type == 2 || debayer_type == 3 ) )
+    if( !( debayer_type == 0 || debayer_type == 2 || debayer_type == 3 || debayer_type >= 10 ) )
         wb_undo(&wb_info, output_frame, width, height, getMlvBlackLevel(video));
 }

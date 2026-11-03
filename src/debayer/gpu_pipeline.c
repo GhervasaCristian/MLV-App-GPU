@@ -121,24 +121,7 @@ static void* prefetch_worker_func(void* arg) {
         }
         int ok = (getMlvRawFrameUint16(video, target, dest) == 0);
         if (ok && video->llrawproc) {
-            int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-            int saved_averaging = video->llrawproc->diso_averaging;
-            int saved_chroma = video->llrawproc->chroma_smooth;
-            int saved_alias = video->llrawproc->diso_alias_map;
-
-            if (is_dual_iso && is_prev) {
-                video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
-                video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 blur during playback */
-                video->llrawproc->diso_alias_map = 0;
-            }
-
             applyLLRawProcObject(video, dest, needed);
-
-            if (is_dual_iso && is_prev) {
-                video->llrawproc->diso_averaging = saved_averaging;
-                video->llrawproc->chroma_smooth = saved_chroma;
-                video->llrawproc->diso_alias_map = saved_alias;
-            }
         }
         pthread_mutex_unlock(&s_io_mutex);
 
@@ -326,24 +309,7 @@ static int load_raw_frame(mlvObject_t *video, uint64_t frame_index, uint16_t *ra
     pthread_mutex_lock(&s_io_mutex);
     int ok = (getMlvRawFrameUint16(video, frame_index, raw_frame) == 0);
     if (ok && video->llrawproc) {
-        int is_dual_iso = (video->llrawproc->diso_validity && video->llrawproc->dual_iso);
-        int saved_averaging = video->llrawproc->diso_averaging;
-        int saved_chroma = video->llrawproc->chroma_smooth;
-        int saved_alias = video->llrawproc->diso_alias_map;
-
-        if (is_dual_iso && is_preview) {
-            video->llrawproc->diso_averaging = 1; /* Fast mean23 for real-time playback */
-            video->llrawproc->chroma_smooth = 0;  /* Bypass heavy 3x3 CPU blur during playback */
-            video->llrawproc->diso_alias_map = 0;
-        }
-
         applyLLRawProcObject(video, raw_frame, raw_size);
-
-        if (is_dual_iso && is_preview) {
-            video->llrawproc->diso_averaging = saved_averaging;
-            video->llrawproc->chroma_smooth = saved_chroma;
-            video->llrawproc->diso_alias_map = saved_alias;
-        }
     }
     pthread_mutex_unlock(&s_io_mutex);
 

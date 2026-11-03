@@ -6,6 +6,7 @@
 #include <pthread.h>
 
 #include "video_mlv.h"
+#include "llrawproc/llrawproc.h"
 #include "../debayer/debayer.h"
 #include "../debayer/gpu_pipeline.h"
 #include "../ca_correct/CA_correct_RT.h"
@@ -310,14 +311,7 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
         if (debayer_type == DEBAYER_GPU_FAST) {
             saved_diso_averaging = video->llrawproc->diso_averaging;
             saved_chroma_smooth = video->llrawproc->chroma_smooth;
-            video->llrawproc->diso_averaging = 1; /* mean23: ultra-fast 3ms for playback */
-            video->llrawproc->chroma_smooth = 0;
-        } else if (debayer_type == DEBAYER_GPU_CINEMA || debayer_type == DEBAYER_GPU_CINEMA_V2 || debayer_type == DEBAYER_GPU_CINEMA_V3) {
-            if (video->llrawproc->diso_averaging == 0) { /* If AMaZE (which bottlenecks at 1,019 ms) */
-                saved_diso_averaging = video->llrawproc->diso_averaging;
-                video->llrawproc->diso_averaging = 2; /* RCD Dual ISO: 4.5ms, identical sharpness */
-            }
-            saved_chroma_smooth = video->llrawproc->chroma_smooth;
+            video->llrawproc->diso_averaging = 1; /* mean23: ultra-fast 3ms for fast mode */
             video->llrawproc->chroma_smooth = 0;
         }
     }
@@ -364,8 +358,9 @@ void get_mlv_raw_frame_debayered( mlvObject_t * video,
         if (debayer_type == DEBAYER_GPU_CINEMA) algo = 11;
         else if (debayer_type == DEBAYER_GPU_CINEMA_V2) algo = 12;
         else if (debayer_type == DEBAYER_GPU_CINEMA_V3) algo = 13;
-        int black = getMlvBlackLevel(video);
-        int white = getMlvWhiteLevel(video);
+        int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
+        int black = (llrpHQDualIso(video)) ? (video->processing ? (int)video->processing->black_level : (getMlvBlackLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvBlackLevel(video) << shift_val);
+        int white = (llrpHQDualIso(video)) ? (video->processing ? (int)video->processing->white_level : (getMlvWhiteLevel(video) << (16 - getMlvBitdepth(video)))) : (getMlvWhiteLevel(video) << shift_val);
         static uint16_t *s_bayer16_cache = NULL;
         static size_t s_bayer16_alloc = 0;
         size_t needed_size = (size_t)width * height * sizeof(uint16_t);

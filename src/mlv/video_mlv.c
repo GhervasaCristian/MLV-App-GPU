@@ -690,6 +690,10 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
     int height = getMlvHeight(video);
     size_t rgb_frame_size = (size_t)height * width * 3;
 
+    uint16_t * unprocessed_frame = (uint16_t*)malloc( rgb_frame_size * sizeof(uint16_t) );
+    if (!unprocessed_frame) return;
+
+    int debayered = 0;
     if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
     {
         int algo = GPU_ALGO_FAST;
@@ -697,18 +701,14 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
         else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
         else if (doesMlvAlwaysUseAmaze(video) == 13) algo = GPU_ALGO_CINEMA_V3;
 
-        if (gpu_pipeline_process_frame(video, frameIndex, outputFrame, algo))
-        {
-            return;
-        }
+        debayered = gpu_pipeline_debayer_frame(video, frameIndex, unprocessed_frame, algo);
     }
 
-    /* Fallback to CPU pipeline */
-    uint16_t * unprocessed_frame = malloc( rgb_frame_size * sizeof(uint16_t) );
-    if (!unprocessed_frame) return;
-
-    /* Get the raw data in B&W */
-    getMlvRawFrameDebayered(video, frameIndex, unprocessed_frame);
+    if (!debayered)
+    {
+        /* Get the raw data in B&W (CPU debayer) */
+        getMlvRawFrameDebayered(video, frameIndex, unprocessed_frame);
+    }
 
     /* Do processing.......... */
     applyProcessingObject( video->processing,
@@ -723,18 +723,7 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
 /* Get a processed frame in 8 bit */
 void getMlvProcessedFrame8(mlvObject_t * video, uint64_t frameIndex, uint8_t * outputFrame, int threads)
 {
-    if (doesMlvAlwaysUseAmaze(video) >= 10 && gpu_pipeline_is_available())
-    {
-        int algo = GPU_ALGO_FAST;
-        if (doesMlvAlwaysUseAmaze(video) == 11) algo = GPU_ALGO_CINEMA;
-        else if (doesMlvAlwaysUseAmaze(video) == 12) algo = GPU_ALGO_CINEMA_V2;
-        else if (doesMlvAlwaysUseAmaze(video) == 13) algo = GPU_ALGO_CINEMA_V3;
 
-        if (gpu_pipeline_process_frame_8(video, frameIndex, outputFrame, algo))
-        {
-            return;
-        }
-    }
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);

@@ -28,7 +28,17 @@ int gpu_pipeline_get_active_device_index(void);
 int gpu_pipeline_set_selected_device(int index);
 int gpu_pipeline_set_selected_device_by_name(const char *name);
 
-/* Process a raw frame through GPU Dual ISO, GPU Debayer, and GPU Post-Processing to 16-bit RGB.
+/* Debayers a frame on GPU into 16-bit linear RGB (unprocessed).
+ * Uses background prefetch ring buffer when available.
+ * Returns 1 on success, 0 on failure (for fail-proof CPU fallback). */
+int gpu_pipeline_debayer_frame(
+    mlvObject_t *video,
+    uint64_t frame_index,
+    uint16_t *debayered_rgb16,
+    int gpu_algorithm
+);
+
+/* Process a raw frame through GPU Debayer and applyProcessingObject to 16-bit RGB.
  * Returns 1 on success, 0 on failure (for fail-proof CPU fallback). */
 int gpu_pipeline_process_frame(
     mlvObject_t *video,

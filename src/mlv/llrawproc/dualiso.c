@@ -1211,21 +1211,25 @@ static inline double * build_fullres_curve(int black)
     static double fullres_curve[1<<20];
     static int previous_black = -1;
 
-    if(previous_black == black) return fullres_curve;
-
-    previous_black = black;
-
-    const double fullres_start = 4;
-    const double fullres_transition = 4;
-    //const double fullres_thr = 0.8;
-
-    #pragma omp parallel for if(USE_OMP) schedule(static)
-    for (int i = 0; i < (1<<20); i++)
+    if (previous_black != black)
     {
-        double ev2 = log2(MAX(i/64.0 - black/64.0, 1));
-        double c2 = -cos(COERCE(ev2 - fullres_start, 0, fullres_transition)*M_PI/fullres_transition);
-        double f = (c2+1) / 2;
-        fullres_curve[i] = f;
+        LOCK(fullres_mutex)
+        if (previous_black != black)
+        {
+            const double fullres_start = 4;
+            const double fullres_transition = 4;
+
+            #pragma omp parallel for if(USE_OMP) schedule(static)
+            for (int i = 0; i < (1<<20); i++)
+            {
+                double ev2 = log2(MAX(i/64.0 - black/64.0, 1));
+                double c2 = -cos(COERCE(ev2 - fullres_start, 0, fullres_transition)*M_PI/fullres_transition);
+                double f = (c2+1) / 2;
+                fullres_curve[i] = f;
+            }
+            previous_black = black;
+        }
+        UNLOCK(fullres_mutex)
     }
 
     return fullres_curve;

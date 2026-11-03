@@ -359,24 +359,47 @@ void applyLLRawProcObject(mlvObject_t * video, uint16_t * raw_image_buff, size_t
         /* dual iso processing */
         if (video->llrawproc->dual_iso == 1) // Full 20bit processing mode
         {
+            /* Copy parameters to local stack so diso_get_full20bit can run concurrently outside lock */
+            int df = video->llrawproc->dark_frame;
+            int iso1 = video->llrawproc->diso1;
+            int iso2 = video->llrawproc->diso2;
+            int pattern = video->llrawproc->diso_pattern;
+            int auto_corr = video->llrawproc->diso_auto_correction;
+            double ev_corr = video->llrawproc->diso_ev_correction;
+            int black_delta = video->llrawproc->diso_black_delta;
+            int avg_method = video->llrawproc->diso_averaging;
+            int alias_map = video->llrawproc->diso_alias_map;
+            int frblending = video->llrawproc->diso_frblending;
+            int cs_method = video->llrawproc->chroma_smooth;
+            int threads = video->cpu_cores;
+
+            pthread_mutex_unlock(&s_llrawproc_mutex);
+
             diso_get_full20bit(raw_info,
                                raw_image_buff,
-                               video->llrawproc->dark_frame,
-                               video->llrawproc->diso1,
-                               video->llrawproc->diso2,
-                               &video->llrawproc->diso_pattern,
-                               &video->llrawproc->diso_auto_correction,
-                               &video->llrawproc->diso_ev_correction,
-                               &video->llrawproc->diso_black_delta,
-                               video->llrawproc->diso_averaging,
-                               video->llrawproc->diso_alias_map,
-                               video->llrawproc->diso_frblending,
-                               video->llrawproc->chroma_smooth,
-                               video->cpu_cores);
-            if (video->llrawproc->diso_pattern < 0)
-            {
-                video->llrawproc->diso_pattern = -video->llrawproc->diso_pattern;
+                               df,
+                               iso1,
+                               iso2,
+                               &pattern,
+                               &auto_corr,
+                               &ev_corr,
+                               &black_delta,
+                               avg_method,
+                               alias_map,
+                               frblending,
+                               cs_method,
+                               threads);
+
+            pthread_mutex_lock(&s_llrawproc_mutex);
+            if (!video->llrawproc) {
+                pthread_mutex_unlock(&s_llrawproc_mutex);
+                return;
             }
+            if (pattern < 0) pattern = -pattern;
+            video->llrawproc->diso_pattern = pattern;
+            video->llrawproc->diso_auto_correction = auto_corr;
+            video->llrawproc->diso_ev_correction = ev_corr;
+            video->llrawproc->diso_black_delta = black_delta;
 
             /* for full20bit set diso levels and bit depth to 16 bit, needed for cDNG export */
             int bits_shift = 16 - raw_info.bits_per_pixel;

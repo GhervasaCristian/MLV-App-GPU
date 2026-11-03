@@ -22,22 +22,24 @@ typedef struct {
     volatile int ready;     /* 0: empty/decoding, 1: ready */
 } ring_slot_t;
 
+#define NUM_PREFETCH_WORKERS 4
+
 static ring_slot_t s_ring[RING_SIZE];
 static pthread_mutex_t s_ring_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  s_ring_cond  = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t s_io_mutex   = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t       s_worker_thread;
-static volatile int    s_worker_started = 0;
+static pthread_t       s_worker_threads[NUM_PREFETCH_WORKERS];
+static volatile int    s_workers_started = 0;
 static volatile int    s_worker_running = 1;
 static mlvObject_t*    s_active_video = NULL;
 static volatile uint64_t s_prefetch_next = 0;
 static volatile int    s_prefetch_algo = GPU_ALGO_CINEMA;
 
-static uint16_t *s_worker_raw = NULL;
-static size_t s_worker_raw_alloc = 0;
-
 static void* prefetch_worker_func(void* arg) {
     (void)arg;
+    uint16_t *local_raw = NULL;
+    size_t local_raw_alloc = 0;
+
     while (s_worker_running) {
         pthread_mutex_lock(&s_ring_mutex);
 
@@ -61,10 +63,10 @@ static void* prefetch_worker_func(void* arg) {
             continue;
         }
 
-        /* Check if target frame is already in ring */
+        /* Check if target frame is already in ring (ready or currently in progress) */
         int already_present = 0;
         for (int i = 0; i < RING_SIZE; i++) {
-            if (s_ring[i].video == video && s_ring[i].frame_index == target && s_ring[i].gpu_algo == algo) {
+            if (s_ring[i].video == video && s_ring[i].frame_index == target) {
                 already_present = 1;
                 break;
             }
@@ -78,7 +80,7 @@ static void* prefetch_worker_func(void* arg) {
         /* Find an empty slot in ring */
         int slot = -1;
         for (int i = 0; i < RING_SIZE; i++) {
-            if (!s_ring[i].ready && s_ring[i].frame_index != target) {
+            if (s_ring[i].video == NULL && !s_ring[i].ready) {
                 slot = i;
                 break;
             }
@@ -113,25 +115,23 @@ static void* prefetch_worker_func(void* arg) {
 
         if (!dest_rgb) continue;
 
-        /* Allocate persistent worker raw Bayer buffer */
+        /* Allocate thread-local raw Bayer buffer */
         size_t raw_needed = npix * sizeof(uint16_t);
-        if (s_worker_raw_alloc < raw_needed) {
-            free(s_worker_raw);
-            s_worker_raw = (uint16_t*)malloc(raw_needed);
-            s_worker_raw_alloc = s_worker_raw ? raw_needed : 0;
+        if (local_raw_alloc < raw_needed) {
+            free(local_raw);
+            local_raw = (uint16_t*)malloc(raw_needed);
+            local_raw_alloc = local_raw ? raw_needed : 0;
         }
-        if (!s_worker_raw) continue;
+        if (!local_raw) continue;
 
-        /* Read raw frame holding s_io_mutex ONLY during disk read (<0.5ms) */
+        /* Read raw frame and decode LJ92 (file I/O mutex is locked only during fread inside video_mlv.c) */
         double t_io0 = mlv_get_time_ms();
-        pthread_mutex_lock(&s_io_mutex);
-        int ok = (getMlvRawFrameUint16(video, target, s_worker_raw) == 0);
-        pthread_mutex_unlock(&s_io_mutex);
+        int ok = (getMlvRawFrameUint16(video, target, local_raw) == 0);
         mlv_profiler_record_lj92(mlv_get_time_ms() - t_io0);
 
         if (ok && video->llrawproc && video->llrawproc->fix_raw) {
             double t_diso0 = mlv_get_time_ms();
-            applyLLRawProcObject(video, s_worker_raw, raw_needed);
+            applyLLRawProcObject(video, local_raw, raw_needed);
             mlv_profiler_record_diso(mlv_get_time_ms() - t_diso0);
         }
 
@@ -139,7 +139,7 @@ static void* prefetch_worker_func(void* arg) {
         if (shift_val > 0) {
             #pragma omp parallel for
             for (size_t i = 0; i < npix; i++) {
-                s_worker_raw[i] <<= shift_val;
+                local_raw[i] <<= shift_val;
             }
         }
 
@@ -154,26 +154,33 @@ static void* prefetch_worker_func(void* arg) {
 
         int debayer_ok = 0;
         if (ok) {
-            debayer_ok = debayerGpu(dest_rgb, s_worker_raw, width, height, black, white, cfa, debayer_algo);
+            debayer_ok = debayerGpu(dest_rgb, local_raw, width, height, black, white, cfa, debayer_algo);
         }
 
         pthread_mutex_lock(&s_ring_mutex);
         if (s_ring[slot].video == video && s_ring[slot].frame_index == target && s_ring[slot].gpu_algo == algo) {
             s_ring[slot].ready = (ok && debayer_ok) ? 1 : 0;
+            if (!s_ring[slot].ready) {
+                s_ring[slot].video = NULL;
+                s_ring[slot].frame_index = (uint64_t)-1;
+            }
         }
         pthread_cond_broadcast(&s_ring_cond);
         pthread_mutex_unlock(&s_ring_mutex);
     }
+    if (local_raw) free(local_raw);
     return NULL;
 }
 
 static void start_worker_if_needed(void) {
-    if (!s_worker_started) {
+    if (!s_workers_started) {
         pthread_mutex_lock(&s_ring_mutex);
-        if (!s_worker_started) {
+        if (!s_workers_started) {
             s_worker_running = 1;
-            pthread_create(&s_worker_thread, NULL, prefetch_worker_func, NULL);
-            s_worker_started = 1;
+            for (int i = 0; i < NUM_PREFETCH_WORKERS; i++) {
+                pthread_create(&s_worker_threads[i], NULL, prefetch_worker_func, NULL);
+            }
+            s_workers_started = 1;
         }
         pthread_mutex_unlock(&s_ring_mutex);
     }
@@ -230,9 +237,11 @@ void gpu_pipeline_free(void) {
     pthread_cond_broadcast(&s_ring_cond);
     pthread_mutex_unlock(&s_ring_mutex);
 
-    if (s_worker_started) {
-        pthread_join(s_worker_thread, NULL);
-        s_worker_started = 0;
+    if (s_workers_started) {
+        for (int i = 0; i < NUM_PREFETCH_WORKERS; i++) {
+            pthread_join(s_worker_threads[i], NULL);
+        }
+        s_workers_started = 0;
     }
 
     pthread_mutex_lock(&s_ring_mutex);
@@ -243,11 +252,8 @@ void gpu_pipeline_free(void) {
             s_ring[i].alloc_bytes = 0;
         }
         s_ring[i].ready = 0;
-    }
-    if (s_worker_raw) {
-        free(s_worker_raw);
-        s_worker_raw = NULL;
-        s_worker_raw_alloc = 0;
+        s_ring[i].video = NULL;
+        s_ring[i].frame_index = (uint64_t)-1;
     }
     s_active_video = NULL;
     pthread_mutex_unlock(&s_ring_mutex);

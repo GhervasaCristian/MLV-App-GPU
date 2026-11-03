@@ -24,6 +24,7 @@
 #include "interpolation/spline_helper.h"
 #include "interpolation/cosine_interpolation.h"
 #include "rbfilter/rbf_wrapper.h"
+#include "../debayer/opencl_debayer.h"
 #include "sobel/sobel.h"
 #include "cafilter/ColorAberrationCorrection.h"
 
@@ -513,35 +514,48 @@ void applyProcessingObject( processingObject_t * processing,
         denoise_2D_median( outputImage, imageX, imageY, processing->denoiserWindow, processing->denoiserStrength );
     }
 
-    /* Recursive bilateral filtering (developed by Qingxiong Yang) must render on complete image, because of border problems */
+    /* Recursive bilateral filtering (developed by Qingxiong Yang) / GPU Chroma bilateral denoise */
     if( processing->rbfDenoiserLuma > 0 || processing->rbfDenoiserChroma > 0 )
     {
-        int img_s = imageX * imageY * 3;
-        memcpy( inputImage, outputImage, img_s * sizeof(uint16_t) );
         double t_rbf_start = mlv_get_time_ms();
-        recursive_bf_wrap(
-                inputImage,
-                outputImage,
-                0.0025f, 0.075f+(((float)processing->rbfDenoiserRange-40.0f)/666.6f),
-                imageX, imageY, 3);
-        mlv_profiler_record_rbf(mlv_get_time_ms() - t_rbf_start);
-
-        float outL = processing->rbfDenoiserLuma/100.0;
-        float inL = 1.0 - outL;
-        float outC = processing->rbfDenoiserChroma/100.0;
-        float inC = 1.0 - outC;
-
-        convert_rgb_to_YCbCr_omp(inputImage, img_s, processing->cs_zone.pre_calc_rgb_to_YCbCr);
-        convert_rgb_to_YCbCr_omp(outputImage, img_s, processing->cs_zone.pre_calc_rgb_to_YCbCr);
-        /* Linear blend strengths */
-#pragma omp parallel for
-        for( int i = 0; i < img_s; i+=3 )
+        int gpu_applied = 0;
+        if (opencl_debayer_is_available())
         {
-            outputImage[i+0] = outputImage[i+0]*outL + inputImage[i+0]*inL;
-            outputImage[i+1] = outputImage[i+1]*outC + inputImage[i+1]*inC;
-            outputImage[i+2] = outputImage[i+2]*outC + inputImage[i+2]*inC;
+            float chroma_str = (float)processing->rbfDenoiserChroma / 100.0f;
+            float luma_str = (float)processing->rbfDenoiserLuma / 100.0f;
+            float range_val = 0.075f + (((float)processing->rbfDenoiserRange - 40.0f) / 666.6f);
+            if (range_val < 0.005f) range_val = 0.005f;
+            gpu_applied = opencl_rbf_chroma_denoise(outputImage, imageX, imageY, chroma_str, luma_str, range_val);
         }
-        convert_YCbCr_to_rgb_omp(outputImage, img_s, processing->cs_zone.pre_calc_YCbCr_to_rgb);
+
+        if (!gpu_applied)
+        {
+            int img_s = imageX * imageY * 3;
+            memcpy( inputImage, outputImage, img_s * sizeof(uint16_t) );
+            recursive_bf_wrap(
+                    inputImage,
+                    outputImage,
+                    0.0025f, 0.075f+(((float)processing->rbfDenoiserRange-40.0f)/666.6f),
+                    imageX, imageY, 3);
+
+            float outL = processing->rbfDenoiserLuma/100.0;
+            float inL = 1.0 - outL;
+            float outC = processing->rbfDenoiserChroma/100.0;
+            float inC = 1.0 - outC;
+
+            convert_rgb_to_YCbCr_omp(inputImage, img_s, processing->cs_zone.pre_calc_rgb_to_YCbCr);
+            convert_rgb_to_YCbCr_omp(outputImage, img_s, processing->cs_zone.pre_calc_rgb_to_YCbCr);
+            /* Linear blend strengths */
+#pragma omp parallel for
+            for( int i = 0; i < img_s; i+=3 )
+            {
+                outputImage[i+0] = outputImage[i+0]*outL + inputImage[i+0]*inL;
+                outputImage[i+1] = outputImage[i+1]*outC + inputImage[i+1]*inC;
+                outputImage[i+2] = outputImage[i+2]*outC + inputImage[i+2]*inC;
+            }
+            convert_YCbCr_to_rgb_omp(outputImage, img_s, processing->cs_zone.pre_calc_YCbCr_to_rgb);
+        }
+        mlv_profiler_record_rbf(mlv_get_time_ms() - t_rbf_start);
     }
     /* RGB CA&ColorMoiree Removal */
     if( processing->ca_desaturate > 0 )

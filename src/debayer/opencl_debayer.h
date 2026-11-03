@@ -91,6 +91,16 @@ int opencl_process_full_frame(
     const gpu_postprocess_params_t *post_params
 );
 
+/* GPU-Accelerated Chroma Bilateral Denoiser */
+int opencl_rbf_chroma_denoise(
+    uint16_t *rgb_image,
+    int width,
+    int height,
+    float chroma_strength,
+    float luma_strength,
+    float range_val
+);
+
 #ifdef __cplusplus
 }
 #endif

@@ -526,6 +526,7 @@ private:
     void saveSession( QString fileName );
     void readXmlElementsFromFile(QXmlStreamReader *Rxml, ReceiptSettings *receipt , int version);
     void writeXmlElementsToFile( QXmlStreamWriter *xmlWriter, ReceiptSettings *receipt );
+    QString generatePerformanceLogSettingsHeader();
     void deleteSession( void );
     bool isFileInSession( QString fileName );
     void pasteReceiptFromClipboardTo( int row );

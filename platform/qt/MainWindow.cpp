@@ -12026,7 +12026,8 @@ void MainWindow::on_buttonPerformanceLog_clicked()
                                                          tr( "CSV Files (*.csv);;Text Files (*.txt);;All Files (*)" ) );
         if( !fileName.isEmpty() )
         {
-            if( mlv_profiler_save_log( fileName.toLocal8Bit().constData() ) )
+            QString settingsHeader = generatePerformanceLogSettingsHeader();
+            if( mlv_profiler_save_log( fileName.toLocal8Bit().constData(), settingsHeader.toUtf8().constData() ) )
             {
                 QMessageBox::information( this, tr( "Performance Log Saved" ),
                                           tr( "Performance log successfully saved!\n\n"
@@ -12055,4 +12056,123 @@ void MainWindow::on_buttonPerformanceLog_clicked()
         m_pPerformanceLogButton->setText( tr( "Recording Log... (Stop)" ) );
         m_pPerformanceLogButton->setToolTip( tr( "Logging is ACTIVE. Play or export frames, then click again to save the log." ) );
     }
+}
+
+
+// Generate human-readable string containing all clip parameters and processing settings
+QString MainWindow::generatePerformanceLogSettingsHeader()
+{
+    QString s;
+    QTextStream out( &s );
+
+    out << "CLIP & ENVIRONMENT INFO:\n";
+    if( m_fileLoaded && m_pMlvObject )
+    {
+        out << "  File Path:          " << m_lastMlvOpenFileName << "\n";
+        out << "  Camera:             " << QString::fromUtf8( (const char*)getMlvCamera( m_pMlvObject ) ) << "\n";
+        out << "  Lens:               " << QString::fromUtf8( (const char*)getMlvLens( m_pMlvObject ) ) << "\n";
+        out << "  Resolution:         " << getMlvWidth( m_pMlvObject ) << "x" << getMlvHeight( m_pMlvObject )
+            << " (Aspect: " << QString::number( getMlvAspectRatio( m_pMlvObject ), 'f', 2 ) << ":1)\n";
+        out << "  Total Frames:       " << (int)getMlvFrames( m_pMlvObject ) << "\n";
+        out << "  Source Framerate:   " << QString::number( getMlvFramerate( m_pMlvObject ), 'f', 3 ) << " fps\n";
+        out << "  Lossless Bit Depth: " << getLosslessBpp( m_pMlvObject ) << " bits (" << (const char*)getMlvCompression( m_pMlvObject ) << ")\n";
+
+        float shutterSpeed = (getMlvShutter( m_pMlvObject ) > 0) ? (1000000.0f / (float)getMlvShutter( m_pMlvObject )) : 0.0f;
+        out << "  ISO / Shutter / Ap: ISO " << (int)getMlvIso( m_pMlvObject )
+            << ", 1/" << (int)(shutterSpeed + 0.5f) << "s (" << getMlvShutter( m_pMlvObject ) << " us)"
+            << ", f/" << QString::number( getMlvAperture( m_pMlvObject ) / 100.0, 'f', 1 )
+            << ", " << getMlvFocalLength( m_pMlvObject ) << " mm\n";
+        out << "  Black/White Level:  " << getMlvOriginalBlackLevel( m_pMlvObject ) << " black / " << getMlvOriginalWhiteLevel( m_pMlvObject ) << " white\n";
+        out << "  Audio:              " << getMlvAudioChannels( m_pMlvObject ) << " ch @ " << getMlvSampleRate( m_pMlvObject ) << " Hz\n";
+    }
+    else
+    {
+        out << "  No MLV clip currently loaded.\n";
+    }
+
+    const char *gpuDev = gpu_pipeline_device_name();
+    out << "  GPU / OpenCL Device: " << (gpuDev ? gpuDev : "CPU / Disabled") << "\n";
+    out << "  CPU Threads (Ideal): " << QThread::idealThreadCount() << " threads\n\n";
+
+    if( m_pModel && !SESSION_EMPTY && m_pModel->activeRow() >= 0 )
+    {
+        setReceipt( ACTIVE_RECEIPT );
+        ReceiptSettings *receipt = ACTIVE_RECEIPT;
+
+        out << "ACTIVE PROCESSING PARAMETERS & RECEIPT SETTINGS:\n";
+        out << "[Debayer & Demosaic]\n";
+        out << "  Debayer Algorithm:    " << ui->comboBoxDebayer->currentText() << " (ID: " << (int)receipt->debayer() << ")\n\n";
+
+        out << "[Denoise Settings]\n";
+        out << "  RBF Denoise Chroma:   " << receipt->rbfDenoiserChroma() << "\n";
+        out << "  RBF Denoise Range:    " << receipt->rbfDenoiserRange() << "\n";
+        out << "  RBF Denoise Luma:     " << receipt->rbfDenoiserLuma() << "\n";
+        out << "  2D Denoise Strength:  " << receipt->denoiserStrength() << "\n";
+        out << "  2D Denoise Window:    " << receipt->denoiserWindow() << "x" << receipt->denoiserWindow() << "\n\n";
+
+        out << "[Exposure, Contrast & White Balance]\n";
+        out << "  Exposure (stops):     " << QString::number( receipt->exposure() / 100.0, 'f', 2 ) << "\n";
+        out << "  Contrast:             " << receipt->contrast() << "\n";
+        out << "  Pivot:                " << QString::number( receipt->pivot() / 100.0, 'f', 2 ) << "\n";
+        out << "  White Balance:        " << receipt->temperature() << " K (Tint: " << QString::number( receipt->tint() / 10.0, 'f', 1 ) << ")\n";
+        out << "  Clarity:              " << receipt->clarity() << "\n";
+        out << "  Vibrance:             " << receipt->vibrance() << "\n";
+        out << "  Saturation:           " << receipt->saturation() << "\n";
+        out << "  Dark Contrast (DS/DR):" << receipt->ds() << " / " << receipt->dr() << "\n";
+        out << "  Light Contrast (LS/LR):" << receipt->ls() << " / " << receipt->lr() << "\n";
+        out << "  Lightening:           " << receipt->lightening() << "\n";
+        out << "  Shadows / Highlights: " << receipt->shadows() << " / " << receipt->highlights() << "\n\n";
+
+        out << "[Color Science, Profile & Gamut]\n";
+        out << "  Image Profile:        " << ui->comboBoxProfile->currentText() << "\n";
+        out << "  Transfer Function:    " << receipt->transferFunction() << "\n";
+        out << "  Gamma:                " << QString::number( receipt->gamma() / 100.0, 'f', 2 ) << "\n";
+        out << "  Processing Gamut:     " << ui->comboBoxProcessingGamut->currentText() << "\n";
+        out << "  Tonemapping:          " << ui->comboBoxTonemapFct->currentText() << "\n";
+        out << "  Camera Matrix:        " << ui->comboBoxUseCameraMatrix->currentText() << "\n";
+        out << "  Creative Adjustments: " << (receipt->allowCreativeAdjustments() ? "Enabled" : "Disabled") << "\n";
+        out << "  EXR Mode:             " << (receipt->exrMode() ? "Enabled" : "Disabled") << "\n";
+        out << "  AgX Mode:             " << (receipt->agx() ? "Enabled" : "Disabled") << "\n";
+        out << "  Toning:               " << (receipt->toningStrength() > 0 ? QString("Tone: %1, Strength: %2%").arg(receipt->tone()).arg(receipt->toningStrength()) : "Disabled") << "\n\n";
+
+        out << "[Detail, Optics & Filters]\n";
+        out << "  Sharpening:           " << receipt->sharpen() << " (Masking: " << receipt->shMasking() << ")\n";
+        out << "  Chroma Blur:          " << receipt->chromaBlur() << "\n";
+        out << "  Chroma Separation:    " << (receipt->isChromaSeparation() ? "Enabled" : "Disabled") << "\n";
+        out << "  Highlight Reconstruct:" << (receipt->isHighlightReconstruction() ? "Enabled" : "Disabled") << "\n";
+        out << "  CA Correction:        Red: " << QString::number( receipt->caRed() / 10.0, 'f', 1 )
+            << ", Blue: " << QString::number( receipt->caBlue() / 10.0, 'f', 1 )
+            << ", Desat: " << receipt->caDesaturate()
+            << ", Radius: " << receipt->caRadius() << "\n";
+        out << "  Vignette:             Strength: " << receipt->vignetteStrength()
+            << ", Radius: " << receipt->vignetteRadius()
+            << ", Shape: " << receipt->vignetteShape() << "\n";
+        out << "  Grain:                Strength: " << receipt->grainStrength()
+            << ", Luma Weight: " << receipt->grainLumaWeight() << "\n";
+        out << "  3D LUT:               " << (receipt->lutEnabled() ? QString("Enabled (%1, Strength: %2%)").arg(receipt->lutName()).arg(receipt->lutStrength()) : "Disabled") << "\n";
+        out << "  Filter:               " << (receipt->filterEnabled() ? QString("Enabled (Index: %1, Strength: %2%)").arg(receipt->filterIndex()).arg(receipt->filterStrength()) : "Disabled") << "\n";
+        out << "  Gradient Filter:      " << (receipt->isGradientEnabled() ? QString("Enabled (Exp: %1, Contrast: %2, Pos: %3x%4, Len: %5, Angle: %6 deg)").arg(receipt->gradientExposure()).arg(receipt->gradientContrast()).arg(receipt->gradientStartX()).arg(receipt->gradientStartY()).arg(receipt->gradientLength()).arg(receipt->gradientAngle()) : "Disabled") << "\n";
+        out << "  Video Stabilization:  " << (receipt->vidStabEnabled() ? QString("Enabled (Zoom: %1, Smooth: %2, Shakiness: %3, Step: %4, Acc: %5, Tripod: %6)").arg(receipt->vidStabZoom()).arg(receipt->vidStabSmoothing()).arg(receipt->vidStabShakiness()).arg(receipt->vidStabStepsize()).arg(receipt->vidStabAccuracy()).arg(receipt->vidStabTripod() ? "Yes" : "No") : "Disabled") << "\n\n";
+
+        out << "[RAW Corrections & Dual ISO]\n";
+        out << "  RAW Fixes:            " << (receipt->rawFixesEnabled() ? "Enabled" : "Disabled") << "\n";
+        out << "  Vertical Stripes:     " << receipt->verticalStripes() << "\n";
+        out << "  Focus Pixels:         " << (receipt->focusPixels() ? QString("Mode %1 (Method: %2)").arg(receipt->focusPixels()).arg(receipt->fpiMethod()) : "Off") << "\n";
+        out << "  Bad Pixels:           " << (receipt->badPixels() ? QString("Mode %1 (Search: %2, Method: %3)").arg(receipt->badPixels()).arg(receipt->bpsMethod()).arg(receipt->bpiMethod()) : "Off") << "\n";
+        out << "  Chroma Smooth:        " << (receipt->chromaSmooth() ? QString("Mode %1").arg(receipt->chromaSmooth()) : "Off") << "\n";
+        out << "  Pattern Noise:        " << (receipt->patternNoise() ? "On" : "Off") << "\n";
+        out << "  Deflicker Target:     " << (receipt->deflickerTarget() > 0 ? QString::number(receipt->deflickerTarget()) : "Disabled") << "\n";
+        out << "  Dark Frame Subtr.:    " << (receipt->darkFrameEnabled() ? QString("Enabled (%1)").arg(receipt->darkFrameFileName()) : "Disabled") << "\n";
+        out << "  RAW Black Override:   " << (receipt->rawBlack() == -1 ? "Auto" : QString::number(receipt->rawBlack())) << "\n";
+        out << "  RAW White Override:   " << (receipt->rawWhite() == -1 ? "Auto" : QString::number(receipt->rawWhite())) << "\n";
+        out << "  Dual ISO:             " << (receipt->dualIso() ? QString("Enabled (Forced: %1, Pattern: %2, EV Corr: %3, Black Delta: %4, Interp: %5, Alias Map: %6, Fullres Blend: %7, White: %8, Black: %9)").arg(receipt->dualIsoForced()).arg(receipt->dualIsoPattern()).arg(receipt->dualIsoEvCorrection()).arg(receipt->dualIsoBlackDelta()).arg(receipt->dualIsoInterpolation()).arg(receipt->dualIsoAliasMap()).arg(receipt->dualIsoFrBlending()).arg(receipt->dualIsoWhite()).arg(receipt->dualIsoBlack()) : "Disabled") << "\n\n";
+
+        out << "[Geometry & Playback Bounds]\n";
+        out << "  Stretch Factors:      X: " << QString::number( receipt->stretchFactorX(), 'f', 4 )
+            << ", Y: " << QString::number( receipt->stretchFactorY(), 'f', 4 ) << "\n";
+        out << "  Upside Down:          " << (receipt->upsideDown() ? "Yes" : "No") << "\n";
+        out << "  Cut Range:            Frame " << receipt->cutIn() << " to " << receipt->cutOut() << "\n";
+    }
+
+    return s;
 }

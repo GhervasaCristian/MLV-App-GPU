@@ -178,7 +178,7 @@ int mlv_profiler_get_logged_count(void) {
     return count;
 }
 
-int mlv_profiler_save_log(const char *filename) {
+int mlv_profiler_save_log(const char *filename, const char *parameters_header) {
     if (!filename) return 0;
 
     pthread_mutex_lock(&s_prof_mutex);
@@ -232,6 +232,11 @@ int mlv_profiler_save_log(const char *filename) {
     fprintf(f, "Resolution:         %dx%d\n", s_log_width, s_log_height);
     fprintf(f, "Debayer Algorithm:  %s\n", s_log_debayer_name);
     fprintf(f, "================================================================================\n\n");
+
+    if (parameters_header && *parameters_header) {
+        fprintf(f, "%s\n", parameters_header);
+        fprintf(f, "================================================================================\n\n");
+    }
 
     fprintf(f, "EXECUTIVE SUMMARY:\n");
     fprintf(f, "  Total Frames Recorded: %zu\n", s_log_count);

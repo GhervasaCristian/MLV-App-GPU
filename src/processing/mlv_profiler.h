@@ -42,7 +42,7 @@ void mlv_profiler_start_logging(const char *clip_name, int width, int height, co
 void mlv_profiler_stop_logging(void);
 int  mlv_profiler_is_logging(void);
 int  mlv_profiler_get_logged_count(void);
-int  mlv_profiler_save_log(const char *filename);
+int  mlv_profiler_save_log(const char *filename, const char *parameters_header);
 
 #ifdef __cplusplus
 }

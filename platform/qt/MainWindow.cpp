@@ -1437,6 +1437,19 @@ void MainWindow::initGui( void )
     m_pChosenDebayer->setToolTip( tr( "Current debayer algorithm." ) );
     statusBar()->addWidget( m_pChosenDebayer );
 
+    // Performance Log Button in Top Right Corner of Menu Bar
+    m_pPerformanceLogButton = new QPushButton( tr( "Performance Log" ), this );
+    m_pPerformanceLogButton->setCheckable( true );
+    m_pPerformanceLogButton->setChecked( false );
+    m_pPerformanceLogButton->setStyleSheet(
+        "QPushButton { background-color: #2e3036; color: #e0e0e0; border: 1px solid #555860; border-radius: 4px; padding: 4px 12px; font-weight: bold; margin-right: 8px; margin-top: 2px; margin-bottom: 2px; }"
+        "QPushButton:hover { background-color: #3e424c; border-color: #777d8c; }"
+        "QPushButton:checked { background-color: #a02828; color: #ffffff; border: 1px solid #ff5555; }"
+    );
+    m_pPerformanceLogButton->setToolTip( tr( "Click to start recording frame-by-frame performance metrics.\nClick again to stop and save the log to a file." ) );
+    ui->menuBar->setCornerWidget( m_pPerformanceLogButton, Qt::TopRightCorner );
+    connect( m_pPerformanceLogButton, SIGNAL( clicked() ), this, SLOT( on_buttonPerformanceLog_clicked() ) );
+
     //Recent sessions menu
     m_pRecentFilesMenu = new QRecentFilesMenu(tr("Recent Sessions"), ui->menuFile);
 
@@ -11985,4 +11998,61 @@ void MainWindow::on_actionSaveSessionMetadata_triggered()
 
     //Write file
     m_pModel->writeMetadataToCsv( fileName );
+}
+
+// Performance log start/stop toggle button
+void MainWindow::on_buttonPerformanceLog_clicked()
+{
+    if( mlv_profiler_is_logging() )
+    {
+        // Stop logging
+        mlv_profiler_stop_logging();
+        m_pPerformanceLogButton->setChecked( false );
+        m_pPerformanceLogButton->setText( tr( "Performance Log" ) );
+        m_pPerformanceLogButton->setToolTip( tr( "Click to start recording frame-by-frame performance metrics.\nClick again to stop and save the log to a file." ) );
+
+        int frameCount = mlv_profiler_get_logged_count();
+        if( frameCount == 0 )
+        {
+            QMessageBox::information( this, tr( "Performance Log" ), tr( "No frames were recorded during the logging session." ) );
+            return;
+        }
+
+        // Ask user where to save the file
+        QString defaultName = QDir::homePath() + QString( "/mlv_perf_log_%1.csv" ).arg( QDateTime::currentDateTime().toString( "yyyyMMdd_hhmmss" ) );
+        QString fileName = QFileDialog::getSaveFileName( this,
+                                                         tr( "Save Performance Log" ),
+                                                         defaultName,
+                                                         tr( "CSV Files (*.csv);;Text Files (*.txt);;All Files (*)" ) );
+        if( !fileName.isEmpty() )
+        {
+            if( mlv_profiler_save_log( fileName.toLocal8Bit().constData() ) )
+            {
+                QMessageBox::information( this, tr( "Performance Log Saved" ),
+                                          tr( "Performance log successfully saved!\n\n"
+                                              "Frames Recorded: %1\n"
+                                              "File: %2" ).arg( frameCount ).arg( fileName ) );
+            }
+            else
+            {
+                QMessageBox::warning( this, tr( "Performance Log Error" ), tr( "Could not write to file: %1" ).arg( fileName ) );
+            }
+        }
+    }
+    else
+    {
+        // Start logging
+        QString clipName = m_fileLoaded ? m_lastMlvOpenFileName : tr( "No Clip Loaded" );
+        int width = m_fileLoaded ? getMlvWidth( m_pMlvObject ) : 0;
+        int height = m_fileLoaded ? getMlvHeight( m_pMlvObject ) : 0;
+        QString debayerName = ui->comboBoxDebayer->currentText();
+
+        mlv_profiler_start_logging( clipName.toLocal8Bit().constData(),
+                                    width, height,
+                                    debayerName.toLocal8Bit().constData() );
+
+        m_pPerformanceLogButton->setChecked( true );
+        m_pPerformanceLogButton->setText( tr( "Recording Log... (Stop)" ) );
+        m_pPerformanceLogButton->setToolTip( tr( "Logging is ACTIVE. Play or export frames, then click again to save the log." ) );
+    }
 }

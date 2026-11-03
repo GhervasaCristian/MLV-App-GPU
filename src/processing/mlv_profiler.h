@@ -37,6 +37,13 @@ void mlv_profiler_get_latest(mlv_telemetry_t *dest);
 /* High-resolution timer helpers (in milliseconds) */
 double mlv_get_time_ms(void);
 
+/* Session Logging API */
+void mlv_profiler_start_logging(const char *clip_name, int width, int height, const char *debayer_name);
+void mlv_profiler_stop_logging(void);
+int  mlv_profiler_is_logging(void);
+int  mlv_profiler_get_logged_count(void);
+int  mlv_profiler_save_log(const char *filename);
+
 #ifdef __cplusplus
 }
 #endif

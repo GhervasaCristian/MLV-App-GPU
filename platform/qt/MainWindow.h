@@ -1,3 +1,5 @@
+#include <QPushButton>
+#include <QDateTime>
 /*!
  * \file MainWindow.h
  * \author masc4ii
@@ -422,6 +424,7 @@ private slots:
     void on_actionShowUnmarkedClips_toggled(bool arg1);
 
     void on_lineEditTransferFunction_textChanged(const QString &arg1);
+    void on_buttonPerformanceLog_clicked();
 
 private:
     Ui::MainWindow *ui;
@@ -444,6 +447,7 @@ private:
     QLabel *m_pFpsStatus;
     QLabel *m_pFrameNumber;
     QLabel *m_pChosenDebayer;
+    QPushButton *m_pPerformanceLogButton;
     QActionGroup *m_darkFrameGroup;
     QActionGroup *m_previewDebayerGroup;
     QActionGroup *m_sessionListGroup;

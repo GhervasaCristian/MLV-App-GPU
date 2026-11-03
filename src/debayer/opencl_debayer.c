@@ -45,6 +45,8 @@ static cl_program s_prog_rcd = NULL;
 static cl_kernel s_k_rcd_step1 = NULL;
 static cl_kernel s_k_rcd_step2 = NULL;
 static cl_kernel s_k_rcd_step3 = NULL;
+static cl_kernel s_k_rcd_step4 = NULL;
+static cl_kernel s_k_rcd_step5 = NULL;
 
 static cl_program s_prog_rcdv2 = NULL;
 static cl_kernel s_k_rcdv2_step1 = NULL;
@@ -336,12 +338,14 @@ int opencl_debayer_init(void) {
         s_k_mg_fast = cl_CreateKernel(s_prog_mg, "k_mg_fast_single_pass", &err);
     }
 
-    /* Build RCD v1 program */
+    /* Build RCD v1 program (Exact pure GPU port of Luis Sanz Rodriguez's RCD algorithm) */
     s_prog_rcd = build_program(s_ctx, selected_device, s_rcd_kernel_src);
     if (s_prog_rcd) {
-        s_k_rcd_step1 = cl_CreateKernel(s_prog_rcd, "k_rcd_step1_green", &err);
-        s_k_rcd_step2 = cl_CreateKernel(s_prog_rcd, "k_rcd_step2_chroma", &err);
-        s_k_rcd_step3 = cl_CreateKernel(s_prog_rcd, "k_rcd_step3_rgb", &err);
+        s_k_rcd_step1 = cl_CreateKernel(s_prog_rcd, "k_rcd_step1_lpf_vh", &err);
+        s_k_rcd_step2 = cl_CreateKernel(s_prog_rcd, "k_rcd_step2_green", &err);
+        s_k_rcd_step3 = cl_CreateKernel(s_prog_rcd, "k_rcd_step3_pq_dir", &err);
+        s_k_rcd_step4 = cl_CreateKernel(s_prog_rcd, "k_rcd_step4_rb_diag", &err);
+        s_k_rcd_step5 = cl_CreateKernel(s_prog_rcd, "k_rcd_step5_synthesis", &err);
     }
 
     /* Build RCD v2 program */
@@ -375,7 +379,7 @@ int opencl_debayer_init(void) {
         s_k_postprocess = cl_CreateKernel(s_prog_post, "k_postprocess_frame", &err);
     }
 
-    if (!s_k_mg_fast || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_rcdv2_step1 || !s_k_rcdv2_step2 || !s_k_rcdv2_step3 || !s_k_rcdv2_step4 || !s_k_rcdv3_step1 || !s_k_rcdv3_step2 || !s_k_rcdv3_step3 || !s_k_rcdv3_step4 || !s_k_rcdv3_step5 || !s_k_rcdv3_step6 || !s_k_diso_interp || !s_k_diso_fusion) {
+    if (!s_k_mg_fast || !s_k_rcd_step1 || !s_k_rcd_step2 || !s_k_rcd_step3 || !s_k_rcd_step4 || !s_k_rcd_step5 || !s_k_rcdv2_step1 || !s_k_rcdv2_step2 || !s_k_rcdv2_step3 || !s_k_rcdv2_step4 || !s_k_rcdv3_step1 || !s_k_rcdv3_step2 || !s_k_rcdv3_step3 || !s_k_rcdv3_step4 || !s_k_rcdv3_step5 || !s_k_rcdv3_step6 || !s_k_diso_interp || !s_k_diso_fusion) {
         pthread_mutex_unlock(&s_ocl_mutex);
         opencl_debayer_free();
         return 0;
@@ -417,6 +421,8 @@ void opencl_debayer_free(void) {
     if (s_k_rcd_step1) { cl_ReleaseKernel(s_k_rcd_step1); s_k_rcd_step1 = NULL; }
     if (s_k_rcd_step2) { cl_ReleaseKernel(s_k_rcd_step2); s_k_rcd_step2 = NULL; }
     if (s_k_rcd_step3) { cl_ReleaseKernel(s_k_rcd_step3); s_k_rcd_step3 = NULL; }
+    if (s_k_rcd_step4) { cl_ReleaseKernel(s_k_rcd_step4); s_k_rcd_step4 = NULL; }
+    if (s_k_rcd_step5) { cl_ReleaseKernel(s_k_rcd_step5); s_k_rcd_step5 = NULL; }
     if (s_prog_rcd) { cl_ReleaseProgram(s_prog_rcd); s_prog_rcd = NULL; }
 
     if (s_k_rcdv2_step1) { cl_ReleaseKernel(s_k_rcdv2_step1); s_k_rcdv2_step1 = NULL; }
@@ -674,22 +680,23 @@ static int execute_debayer(cl_mem bayer_buf, int width, int height, int cfa_patt
 
         err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcdv2_step4, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
-    } else if ((algorithm == GPU_DEBAYER_CINEMA || algorithm == 11) && s_k_rcd_step1 && s_k_rcd_step2 && s_k_rcd_step3) {
-        /* Pass 1: RCD Step 1 Green Reconstruction with 4th-power edge-locking */
+    } else if ((algorithm == GPU_DEBAYER_CINEMA || algorithm == 11) && s_k_rcd_step1 && s_k_rcd_step2 && s_k_rcd_step3 && s_k_rcd_step4 && s_k_rcd_step5) {
+        /* Pass 1: Multispectral LPF and 7-tap zero-DC directional VH discrimination */
         cl_SetKernelArg(s_k_rcd_step1, 0, sizeof(cl_mem), &bayer_buf);
-        cl_SetKernelArg(s_k_rcd_step1, 1, sizeof(cl_mem), &s_buf_green);
-        cl_SetKernelArg(s_k_rcd_step1, 2, sizeof(int), &width);
-        cl_SetKernelArg(s_k_rcd_step1, 3, sizeof(int), &height);
-        cl_SetKernelArg(s_k_rcd_step1, 4, sizeof(int), &cfa_pattern);
+        cl_SetKernelArg(s_k_rcd_step1, 1, sizeof(cl_mem), &s_buf_lpf);
+        cl_SetKernelArg(s_k_rcd_step1, 2, sizeof(cl_mem), &s_buf_vh_dir);
+        cl_SetKernelArg(s_k_rcd_step1, 3, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcd_step1, 4, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcd_step1, 5, sizeof(int), &cfa_pattern);
 
         err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step1, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
 
-        /* Pass 2: RCD Step 2 Directional Chromatic Difference Fields (Diff_R, Diff_B) */
+        /* Pass 2: Ratio-Corrected Green Channel Reconstruction */
         cl_SetKernelArg(s_k_rcd_step2, 0, sizeof(cl_mem), &bayer_buf);
-        cl_SetKernelArg(s_k_rcd_step2, 1, sizeof(cl_mem), &s_buf_green);
-        cl_SetKernelArg(s_k_rcd_step2, 2, sizeof(cl_mem), &s_buf_diff_r);
-        cl_SetKernelArg(s_k_rcd_step2, 3, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcd_step2, 1, sizeof(cl_mem), &s_buf_lpf);
+        cl_SetKernelArg(s_k_rcd_step2, 2, sizeof(cl_mem), &s_buf_vh_dir);
+        cl_SetKernelArg(s_k_rcd_step2, 3, sizeof(cl_mem), &s_buf_green);
         cl_SetKernelArg(s_k_rcd_step2, 4, sizeof(int), &width);
         cl_SetKernelArg(s_k_rcd_step2, 5, sizeof(int), &height);
         cl_SetKernelArg(s_k_rcd_step2, 6, sizeof(int), &cfa_pattern);
@@ -697,15 +704,40 @@ static int execute_debayer(cl_mem bayer_buf, int width, int height, int cfa_patt
         err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step2, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
 
-        /* Pass 3: RCD Step 3 3x3 Sorting Network Median Filter & Full RGB Synthesis */
-        cl_SetKernelArg(s_k_rcd_step3, 0, sizeof(cl_mem), &s_buf_green);
-        cl_SetKernelArg(s_k_rcd_step3, 1, sizeof(cl_mem), &s_buf_diff_r);
-        cl_SetKernelArg(s_k_rcd_step3, 2, sizeof(cl_mem), &s_buf_diff_b);
-        cl_SetKernelArg(s_k_rcd_step3, 3, sizeof(cl_mem), &s_buf_rgb);
-        cl_SetKernelArg(s_k_rcd_step3, 4, sizeof(int), &width);
-        cl_SetKernelArg(s_k_rcd_step3, 5, sizeof(int), &height);
+        /* Pass 3: 7-tap zero-DC Diagonal High Pass Filter and P/Q Discrimination */
+        cl_SetKernelArg(s_k_rcd_step3, 0, sizeof(cl_mem), &bayer_buf);
+        cl_SetKernelArg(s_k_rcd_step3, 1, sizeof(cl_mem), &s_buf_diag_dir);
+        cl_SetKernelArg(s_k_rcd_step3, 2, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcd_step3, 3, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcd_step3, 4, sizeof(int), &cfa_pattern);
 
         err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step3, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 4: Populate Red at Blue sites, and Blue at Red sites */
+        cl_SetKernelArg(s_k_rcd_step4, 0, sizeof(cl_mem), &bayer_buf);
+        cl_SetKernelArg(s_k_rcd_step4, 1, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcd_step4, 2, sizeof(cl_mem), &s_buf_diag_dir);
+        cl_SetKernelArg(s_k_rcd_step4, 3, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcd_step4, 4, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcd_step4, 5, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcd_step4, 6, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcd_step4, 7, sizeof(int), &cfa_pattern);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step4, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
+        if (err != CL_SUCCESS) return 0;
+
+        /* Pass 5: Populate Red and Blue at Green sites & Synthesize 16-bit RGB */
+        cl_SetKernelArg(s_k_rcd_step5, 0, sizeof(cl_mem), &s_buf_green);
+        cl_SetKernelArg(s_k_rcd_step5, 1, sizeof(cl_mem), &s_buf_diff_r);
+        cl_SetKernelArg(s_k_rcd_step5, 2, sizeof(cl_mem), &s_buf_diff_b);
+        cl_SetKernelArg(s_k_rcd_step5, 3, sizeof(cl_mem), &s_buf_vh_dir);
+        cl_SetKernelArg(s_k_rcd_step5, 4, sizeof(cl_mem), &s_buf_rgb);
+        cl_SetKernelArg(s_k_rcd_step5, 5, sizeof(int), &width);
+        cl_SetKernelArg(s_k_rcd_step5, 6, sizeof(int), &height);
+        cl_SetKernelArg(s_k_rcd_step5, 7, sizeof(int), &cfa_pattern);
+
+        err = cl_EnqueueNDRangeKernel(s_queue, s_k_rcd_step5, 2, NULL, global_ws, local_ws, 0, NULL, NULL);
         if (err != CL_SUCCESS) return 0;
     } else {
         /* GPU FAST: Ultra-Fast Single-Pass Debayer */

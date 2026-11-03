@@ -1,3 +1,4 @@
+#include "../processing/mlv_profiler.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -686,6 +687,7 @@ void getMlvRawFrameDebayered(mlvObject_t * video, uint64_t frameIndex, uint16_t 
  * it may have minor artifacts (though I haven't found them yet) */
 void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t * outputFrame, int threads)
 {
+    double t_frame_start = mlv_get_time_ms();
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
     size_t rgb_frame_size = (size_t)height * width * 3;
@@ -718,6 +720,10 @@ void getMlvProcessedFrame16(mlvObject_t * video, uint64_t frameIndex, uint16_t *
                            threads, 1, frameIndex );
 
     free(unprocessed_frame);
+
+    double t_total = mlv_get_time_ms() - t_frame_start;
+    int ready_slots = gpu_pipeline_is_available() ? gpu_pipeline_get_ring_ready_count() : 0;
+    mlv_profiler_record_frame_done(frameIndex, t_total, ready_slots, 16);
 }
 
 /* Get a processed frame in 8 bit */

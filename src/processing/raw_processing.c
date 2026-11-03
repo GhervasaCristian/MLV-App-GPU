@@ -1,3 +1,4 @@
+#include "mlv_profiler.h"
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -517,11 +518,13 @@ void applyProcessingObject( processingObject_t * processing,
     {
         int img_s = imageX * imageY * 3;
         memcpy( inputImage, outputImage, img_s * sizeof(uint16_t) );
+        double t_rbf_start = mlv_get_time_ms();
         recursive_bf_wrap(
                 inputImage,
                 outputImage,
                 0.0025f, 0.075f+(((float)processing->rbfDenoiserRange-40.0f)/666.6f),
                 imageX, imageY, 3);
+        mlv_profiler_record_rbf(mlv_get_time_ms() - t_rbf_start);
 
         float outL = processing->rbfDenoiserLuma/100.0;
         float inL = 1.0 - outL;

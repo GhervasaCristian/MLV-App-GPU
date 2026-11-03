@@ -1,3 +1,4 @@
+#include <cstring>
 /*
 MIT License
 
@@ -51,6 +52,10 @@ void CRBFilterPlain::reserveMemory(int max_width, int max_height, int channels)
     if(!(max_width >= 10 && max_width < 10000))return;
     if(!(max_height >= 10 && max_height < 10000))return;
     if(!(channels >= 1 && channels <= 4))return;
+
+    if (m_reserve_width == max_width && m_reserve_height == max_height && m_reserve_channels == channels && m_left_pass_color != nullptr) {
+        return;
+    }
 
 	releaseMemory();
 
@@ -199,6 +204,24 @@ void CRBFilterPlain::filter(uint16_t* img_src, uint16_t* img_dst,
     if(!(m_reserve_channels == channel)) return;
     if(!(m_reserve_width >= width)) return;
     if(!(m_reserve_height >= height)) return;
+
+    // Zero unwritten border rows/cols to guarantee 100% deterministic bit-identical output with persistent buffers
+    int last_row_start = (height - 1) * width * channel;
+    memset(m_left_pass_color + last_row_start, 0, width * channel * sizeof(float));
+    memset(m_right_pass_color + last_row_start, 0, width * channel * sizeof(float));
+    memset(m_left_pass_factor + (height - 1) * width, 0, width * sizeof(float));
+    memset(m_right_pass_factor + (height - 1) * width, 0, width * sizeof(float));
+
+    #pragma omp parallel for schedule(static)
+    for (int y = 0; y < height; y++) {
+        size_t last_col_pix = (size_t)y * width + (width - 1);
+        m_down_pass_factor[last_col_pix] = 0.f;
+        m_up_pass_factor[last_col_pix] = 0.f;
+        for (int c = 0; c < channel; c++) {
+            m_down_pass_color[last_col_pix * channel + c] = 0.f;
+            m_up_pass_color[last_col_pix * channel + c] = 0.f;
+        }
+    }
 
     // compute a lookup table
     float alpha_f = static_cast<float>(exp(-sqrt(2.0) / (sigma_spatial * QX_DEF_U16_MAX)));

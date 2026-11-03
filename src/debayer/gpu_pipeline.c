@@ -1,3 +1,4 @@
+#include "../processing/mlv_profiler.h"
 #include "gpu_pipeline.h"
 #include "opencl_debayer.h"
 #include "debayer.h"
@@ -122,12 +123,16 @@ static void* prefetch_worker_func(void* arg) {
         if (!s_worker_raw) continue;
 
         /* Read raw frame holding s_io_mutex ONLY during disk read (<0.5ms) */
+        double t_io0 = mlv_get_time_ms();
         pthread_mutex_lock(&s_io_mutex);
         int ok = (getMlvRawFrameUint16(video, target, s_worker_raw) == 0);
         pthread_mutex_unlock(&s_io_mutex);
+        mlv_profiler_record_lj92(mlv_get_time_ms() - t_io0);
 
         if (ok && video->llrawproc && video->llrawproc->fix_raw) {
+            double t_diso0 = mlv_get_time_ms();
             applyLLRawProcObject(video, s_worker_raw, raw_needed);
+            mlv_profiler_record_diso(mlv_get_time_ms() - t_diso0);
         }
 
         int shift_val = (llrpHQDualIso(video)) ? 0 : (16 - getMlvBitdepth(video));
@@ -172,6 +177,17 @@ static void start_worker_if_needed(void) {
         }
         pthread_mutex_unlock(&s_ring_mutex);
     }
+}
+
+
+int gpu_pipeline_get_ring_ready_count(void) {
+    pthread_mutex_lock(&s_ring_mutex);
+    int count = 0;
+    for (int i = 0; i < RING_SIZE; i++) {
+        if (s_ring[i].ready) count++;
+    }
+    pthread_mutex_unlock(&s_ring_mutex);
+    return count;
 }
 
 void gpu_pipeline_trigger_prefetch(mlvObject_t *video, uint64_t next_frame_index) {
@@ -306,6 +322,7 @@ int gpu_pipeline_debayer_frame(
     if (!gpu_pipeline_is_available()) return 0;
 
     start_worker_if_needed();
+    double t_deb0 = mlv_get_time_ms();
 
     int width = getMlvWidth(video);
     int height = getMlvHeight(video);
@@ -336,6 +353,7 @@ int gpu_pipeline_debayer_frame(
                 }
                 pthread_cond_broadcast(&s_ring_cond);
                 pthread_mutex_unlock(&s_ring_mutex);
+                mlv_profiler_record_debayer(mlv_get_time_ms() - t_deb0, 1);
                 return 1; /* Instant cache hit! */
             }
             break;
@@ -390,6 +408,7 @@ int gpu_pipeline_debayer_frame(
 
     int debayer_ok = debayerGpu(debayered_rgb16, s_sync_raw, width, height, black, white, cfa, debayer_algo);
     pthread_mutex_unlock(&s_sync_mutex);
+    mlv_profiler_record_debayer(mlv_get_time_ms() - t_deb0, 0);
 
     return debayer_ok;
 }

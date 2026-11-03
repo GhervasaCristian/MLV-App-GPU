@@ -31,6 +31,8 @@ int gpu_pipeline_set_selected_device_by_name(const char *name);
 /* Debayers a frame on GPU into 16-bit linear RGB (unprocessed).
  * Uses background prefetch ring buffer when available.
  * Returns 1 on success, 0 on failure (for fail-proof CPU fallback). */
+int gpu_pipeline_get_ring_ready_count(void);
+
 int gpu_pipeline_debayer_frame(
     mlvObject_t *video,
     uint64_t frame_index,

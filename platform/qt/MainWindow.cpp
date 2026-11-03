@@ -1,3 +1,4 @@
+#include "../../src/processing/mlv_profiler.h"
 /*!
  * \file MainWindow.cpp
  * \author masc4ii
@@ -300,8 +301,40 @@ void MainWindow::timerFrameEvent( void )
         //Allow interaction while playback
         //qApp->processEvents();
 
-        //fps measurement
-        if( timeDiff != 0 ) m_pFpsStatus->setText( tr( "Playback: %1 fps" ).arg( (int)( 1000 / lastTime.msecsTo( nowTime ) ) ) );
+        //fps & profiler measurement
+        if( timeDiff != 0 )
+        {
+            int fps = (int)( 1000 / lastTime.msecsTo( nowTime ) );
+            mlv_telemetry_t telem;
+            mlv_profiler_get_latest( &telem );
+            if( telem.t_total_frame_ms > 0.0 )
+            {
+                m_pFpsStatus->setText( tr( "%1 fps [GPU:%2ms|RBF:%3ms|Buf:%4/16]" )
+                    .arg( fps )
+                    .arg( (int)telem.t_gpu_debayer_ms )
+                    .arg( (int)telem.t_rbf_ms )
+                    .arg( telem.ring_ready_slots ) );
+                m_pFpsStatus->setToolTip( tr( "Pipeline Telemetry (Frame %1):\n"
+                                              "  Total Frame: %2 ms\n"
+                                              "  GPU Debayer: %3 ms (%4)\n"
+                                              "  RBF Denoise: %5 ms\n"
+                                              "  LJ92 Decode: %6 ms\n"
+                                              "  Dual ISO:    %7 ms\n"
+                                              "  Ring Buffer: %8 / 16 ready" )
+                    .arg( telem.frame_index )
+                    .arg( telem.t_total_frame_ms, 0, 'f', 1 )
+                    .arg( telem.t_gpu_debayer_ms, 0, 'f', 1 )
+                    .arg( telem.is_cache_hit ? "Ring Hit <0.1ms" : "Sync Miss" )
+                    .arg( telem.t_rbf_ms, 0, 'f', 1 )
+                    .arg( telem.t_lj92_ms, 0, 'f', 1 )
+                    .arg( telem.t_diso_ms, 0, 'f', 1 )
+                    .arg( telem.ring_ready_slots ) );
+            }
+            else
+            {
+                m_pFpsStatus->setText( tr( "Playback: %1 fps" ).arg( fps ) );
+            }
+        }
         lastTime = nowTime;
 
         //When playback is off, the timeDiff is set to 0 for DropFrameMode
@@ -1382,7 +1415,7 @@ void MainWindow::initGui( void )
 
     //Set up fps status label
     m_pFpsStatus = new QLabel( statusBar() );
-    m_pFpsStatus->setMaximumWidth( 110 );
+    m_pFpsStatus->setMaximumWidth( 320 );
     m_pFpsStatus->setMinimumWidth( 110 );
     m_pFpsStatus->setText( tr( "Playback: 0 fps" ) );
     //m_pFpsStatus->setFrameStyle(QFrame::Panel | QFrame::Sunken);
